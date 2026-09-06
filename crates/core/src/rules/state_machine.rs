@@ -1,14 +1,16 @@
 use std::collections::HashSet;
 
+use swc_core::atoms::Atom;
 use swc_core::common::util::take::Take;
 use swc_core::common::{Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrowExpr, AssignExpr, AssignOp, AssignTarget, BlockStmt, BreakStmt, CatchClause, CondExpr,
     ContinueStmt, Expr, ExprOrSpread, ExprStmt, ForStmt, Function, Ident, IfStmt, Lit, Pat,
-    SimpleAssignTarget, Stmt, TryStmt, UnaryExpr, UnaryOp,
+    SimpleAssignTarget, Stmt, SwitchCase, TryStmt, UnaryExpr, UnaryOp,
 };
 use swc_core::ecma::visit::{Visit, VisitWith};
 
+use super::decl_utils::fresh_binding_ident;
 use super::helper_matcher::{binding_key, BindingKey};
 
 #[derive(Clone, Copy)]
@@ -53,6 +55,78 @@ pub(crate) enum IndexLoopContinueMode {
 pub(crate) struct StateMachineProgram {
     blocks: Vec<StateBlock>,
     try_regions: Vec<[Option<usize>; 4]>,
+    catch_bindings: CatchBindings,
+}
+
+/// The catch-clause binding each try region declares when the machine is
+/// rebuilt. Decoders replace the caught-value reads inside a catch label with
+/// the same identifier, so the declaration and its references share one
+/// context. Regions are indexed like the try-region table.
+#[derive(Clone)]
+pub(crate) struct CatchBindings {
+    name: Atom,
+    idents: Vec<Option<Ident>>,
+}
+
+impl Default for CatchBindings {
+    fn default() -> Self {
+        Self {
+            name: Atom::from("error"),
+            idents: Vec::new(),
+        }
+    }
+}
+
+impl CatchBindings {
+    /// Chooses the catch parameter's spelling: `error`, or `error_1`, `error_2`,
+    /// ... when the machine already spells that identifier. Printed JavaScript
+    /// has no context, so a spelled name could be captured by, or capture, the
+    /// binding it belongs to. `folded_aliases` are the lowered catch temps the
+    /// decoder folds into the binding (`error_1 = _a.sent()`); their spelling
+    /// disappears with them, so it stays available.
+    pub(crate) fn for_cases(cases: &[SwitchCase], folded_aliases: &HashSet<Atom>) -> Self {
+        struct Names(HashSet<Atom>);
+        impl Visit for Names {
+            fn visit_ident(&mut self, ident: &Ident) {
+                self.0.insert(ident.sym.clone());
+            }
+        }
+        let mut names = Names(HashSet::new());
+        for case in cases {
+            case.visit_with(&mut names);
+        }
+        let mut name = Atom::from("error");
+        let mut suffix = 1usize;
+        while names.0.contains(&name) && !folded_aliases.contains(&name) {
+            name = Atom::from(format!("error_{suffix}"));
+            suffix += 1;
+        }
+        Self {
+            name,
+            idents: Vec::new(),
+        }
+    }
+
+    /// The binding for `label_idx` when that label starts a catch region.
+    pub(crate) fn for_label(
+        &mut self,
+        label_idx: usize,
+        trys: &[[Option<usize>; 4]],
+    ) -> Option<Ident> {
+        let region = trys
+            .iter()
+            .position(|region| region[1] == Some(label_idx))?;
+        Some(self.for_region(region))
+    }
+
+    fn for_region(&mut self, region: usize) -> Ident {
+        if self.idents.len() <= region {
+            self.idents.resize(region + 1, None);
+        }
+        self.idents[region]
+            .get_or_insert_with(|| fresh_binding_ident(self.name.clone(), DUMMY_SP))
+            .clone()
+    }
 }
 
 impl StateMachineProgram {
@@ -66,7 +140,13 @@ impl StateMachineProgram {
                 .map(|(label, stmt)| StateBlock::new(label, vec![stmt]))
                 .collect(),
             try_regions,
+            catch_bindings: CatchBindings::default(),
         }
+    }
+
+    pub(crate) fn with_catch_bindings(mut self, catch_bindings: CatchBindings) -> Self {
+        self.catch_bindings = catch_bindings;
+        self
     }
 
     pub(crate) fn resolve_labeled_forward_jumps(
@@ -97,8 +177,13 @@ impl StateMachineProgram {
         let Self {
             blocks,
             try_regions,
+            mut catch_bindings,
         } = self;
-        reconstruct_with_regions(label_stmts_from_blocks(blocks), &try_regions)
+        reconstruct_with_regions(
+            label_stmts_from_blocks(blocks),
+            &try_regions,
+            &mut catch_bindings,
+        )
     }
 
     pub(crate) fn into_reconstructed_stmts_with_index_loops(
@@ -649,6 +734,7 @@ fn convert_jump_return(
 pub(crate) fn reconstruct_with_regions(
     label_stmts: Vec<Vec<Stmt>>,
     trys: &[[Option<usize>; 4]],
+    catch_bindings: &mut CatchBindings,
 ) -> Vec<Stmt> {
     if trys.is_empty() {
         return label_stmts.into_iter().flatten().collect();
@@ -659,9 +745,9 @@ pub(crate) fn reconstruct_with_regions(
     let mut i = 0usize;
 
     while i < n {
-        let region = trys.iter().find(|r| r[0] == Some(i));
-        if let Some(region) = region {
-            let [_try_start, catch_start, finally_start, next] = *region;
+        let region_index = trys.iter().position(|r| r[0] == Some(i));
+        if let Some(region_index) = region_index {
+            let [_try_start, catch_start, finally_start, next] = trys[region_index];
 
             let try_end = catch_start.or(finally_start).unwrap_or(n);
             let try_stmts: Vec<Stmt> = label_stmts[i..try_end.min(n)]
@@ -689,7 +775,7 @@ pub(crate) fn reconstruct_with_regions(
                 Some(CatchClause {
                     span: catch_span,
                     param: Some(Pat::Ident(swc_core::ecma::ast::BindingIdent {
-                        id: Ident::new_no_ctxt("error".into(), DUMMY_SP),
+                        id: catch_bindings.for_region(region_index),
                         type_ann: None,
                     })),
                     body: BlockStmt {
@@ -975,7 +1061,6 @@ pub(crate) fn invert_condition(test: &Expr) -> Box<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swc_core::atoms::Atom;
     use swc_core::ecma::ast::{ArrayLit, ExprStmt, Number, ReturnStmt};
 
     #[test]

@@ -3167,3 +3167,43 @@ fn swc_async_namespace_pipeline_retains_mutations_and_unsupported_calls() {
     assert!(!output.contains("async function"), "{output}");
     assert!(output.contains("helper(function*"), "{output}");
 }
+
+#[test]
+fn catch_binding_avoids_names_the_machine_already_spells() {
+    // `error` is a parameter the catch body reads; the synthesized catch
+    // parameter must not reuse its spelling.
+    let input = r#"
+var _marked = regeneratorRuntime.mark(g);
+function g(error) {
+  return regeneratorRuntime.wrap(function(_ctx) {
+    while (true) {
+      switch (_ctx.prev = _ctx.next) {
+        case 0:
+          _ctx.prev = 0;
+          _ctx.next = 3;
+          return doThing();
+        case 3:
+          _ctx.next = 8;
+          break;
+        case 5:
+          _ctx.prev = 5;
+          _ctx.t0 = _ctx.catch(0);
+          handle(_ctx.t0, error);
+        case 8:
+        case "end":
+          return _ctx.stop();
+      }
+    }
+  }, _marked, null, [[0, 5]]);
+}
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("catch (error_1)"),
+        "catch binding should avoid the spelled `error`, got:\n{output}"
+    );
+    assert!(
+        output.contains("handle(error_1, error)"),
+        "caught value should use the fresh name, got:\n{output}"
+    );
+}

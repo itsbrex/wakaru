@@ -19,9 +19,10 @@ use super::helper_matcher::{
     binding_key, count_binding_refs, member_prop_name, remove_fn_decls_by_binding,
     remove_var_declarators_by_binding,
 };
+use super::remove_void::finalize_synthesized_undefined;
 use super::state_machine::{
-    invert_condition, stmts_contain_state_opcode_return, ForwardJumpJoin, IndexLoopContinueMode,
-    OpcodeReturnScan, StateMachineProgram,
+    invert_condition, stmts_contain_state_opcode_return, CatchBindings, ForwardJumpJoin,
+    IndexLoopContinueMode, OpcodeReturnScan, StateMachineProgram,
 };
 use super::transpiler_helper_utils::{BindingKey, LocalHelperContext, TranspilerHelperKind};
 use super::un_async_await::{try_transform_ts_generator_body, AsyncHelperContext};
@@ -81,6 +82,7 @@ impl VisitMut for UnRegenerator<'_> {
             self.current_filename,
             &local_helpers,
         );
+        finalize_synthesized_undefined(module, self.unresolved_mark);
     }
 }
 
@@ -1730,6 +1732,15 @@ fn decode_babel_state_machine(
     mut trys: Vec<[Option<usize>; 4]>,
 ) -> Vec<Stmt> {
     infer_try_region_nexts(&mut trys, &cases);
+    let folded_aliases: HashSet<Atom> = cases
+        .iter()
+        .flat_map(|case| case.cons.iter())
+        .filter_map(|stmt| match extract_catch_value_alias(state_name, stmt)? {
+            CatchValueAlias::LocalIdent((name, _)) => Some(name),
+            CatchValueAlias::StateMember(_) => None,
+        })
+        .collect();
+    let mut catch_bindings = CatchBindings::for_cases(&cases, &folded_aliases);
     // Collect (label_idx, stmt) pairs
     let mut flat: Vec<(usize, Stmt)> = Vec::new();
     let mut skip_delegate_result_assignments: HashSet<(usize, usize)> = HashSet::new();
@@ -1742,7 +1753,7 @@ fn decode_babel_state_machine(
         let next_case_label = next_numeric_case_label(&cases, idx);
 
         let mut catch_aliases = Vec::new();
-        let is_catch = is_catch_label(idx, &trys);
+        let catch_binding = catch_bindings.for_label(idx, &trys);
         let stmts = &case.cons;
         let mut i = 0;
         while i < stmts.len() {
@@ -1792,7 +1803,7 @@ fn decode_babel_state_machine(
                 continue;
             }
 
-            if is_catch {
+            if catch_binding.is_some() {
                 if let Some(alias) = extract_catch_value_alias(state_name, stmt) {
                     catch_aliases.push(alias);
                     i += 1;
@@ -1801,14 +1812,11 @@ fn decode_babel_state_machine(
             }
 
             let mut stmt = stmt.clone();
-            if is_catch {
+            if let Some(catch_binding) = &catch_binding {
                 let mut replacer = CatchValueReplacer {
                     state_name: state_name.clone(),
                     aliases: catch_aliases.clone(),
-                    replacement: Box::new(Expr::Ident(Ident::new_no_ctxt(
-                        "error".into(),
-                        DUMMY_SP,
-                    ))),
+                    replacement: Box::new(Expr::Ident(catch_binding.clone())),
                 };
                 stmt.visit_mut_with(&mut replacer);
             }
@@ -1950,13 +1958,10 @@ fn decode_babel_state_machine(
             continue;
         }
         if stmt_uses_sent(state_name, &stmt) {
-            if is_catch_label(idx, &trys) {
+            if let Some(catch_binding) = catch_bindings.for_label(idx, &trys) {
                 let mut replacer = SentReplacer {
                     state_name: state_name.clone(),
-                    replacement: Box::new(Expr::Ident(Ident::new_no_ctxt(
-                        "error".into(),
-                        DUMMY_SP,
-                    ))),
+                    replacement: Box::new(Expr::Ident(catch_binding)),
                 };
                 let mut s = stmt;
                 s.visit_mut_with(&mut replacer);
@@ -2005,6 +2010,7 @@ fn decode_babel_state_machine(
     let has_back_edge_to_zero = detect_back_edge_to_zero(state_name, &cases);
 
     let mut result = StateMachineProgram::from_labeled_stmts(output, trys)
+        .with_catch_bindings(catch_bindings)
         .recover_conditional_assignments()
         .recover_conditional_branches(OpcodeReturnScan::IncludeNestedFunctions)
         // MidMachine joins are unsound here: a regenerator yield resumes at the
@@ -2766,10 +2772,6 @@ fn extract_yield_from_stmt(stmt: &Stmt) -> Option<Box<Expr>> {
         }
     }
     None
-}
-
-fn is_catch_label(label_idx: usize, trys: &[[Option<usize>; 4]]) -> bool {
-    trys.iter().any(|region| region[1] == Some(label_idx))
 }
 
 struct SentReplacer {
@@ -4384,6 +4386,65 @@ mod tests {
     use swc_core::common::{sync::Lrc, FileName, Globals, SourceMap, GLOBALS};
     use swc_core::ecma::parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax};
     use swc_core::ecma::transforms::base::resolver;
+
+    #[test]
+    fn catch_binding_and_its_references_share_one_context() {
+        let source = r#"
+var _marked = regeneratorRuntime.mark(g);
+function g() {
+  return regeneratorRuntime.wrap(function(_ctx) {
+    while (true) {
+      switch (_ctx.prev = _ctx.next) {
+        case 0:
+          _ctx.prev = 0;
+          _ctx.next = 3;
+          return doThing();
+        case 3:
+          _ctx.next = 8;
+          break;
+        case 5:
+          _ctx.prev = 5;
+          _ctx.t0 = _ctx.catch(0);
+          handle(_ctx.t0);
+        case 8:
+        case "end":
+          return _ctx.stop();
+      }
+    }
+  }, _marked, null, [[0, 5]]);
+}
+"#;
+        GLOBALS.set(&Globals::new(), || {
+            let cm: Lrc<SourceMap> = Default::default();
+            let mut module = crate::unpacker::parse_es_module(source, "fixture.js", cm)
+                .expect("fixture should parse");
+            let unresolved_mark = Mark::new();
+            module.visit_mut_with(&mut resolver(unresolved_mark, Mark::new(), false));
+
+            module.visit_mut_with(&mut UnRegenerator::new(unresolved_mark));
+
+            #[derive(Default)]
+            struct Errors(Vec<Ident>);
+            impl Visit for Errors {
+                fn visit_ident(&mut self, ident: &Ident) {
+                    if ident.sym == "error" {
+                        self.0.push(ident.clone());
+                    }
+                }
+            }
+            let mut errors = Errors::default();
+            module.visit_with(&mut errors);
+            assert_eq!(
+                errors.0.len(),
+                2,
+                "catch parameter plus one reference: {:?}",
+                errors.0
+            );
+            assert_eq!(errors.0[0].ctxt, errors.0[1].ctxt);
+            assert_ne!(errors.0[0].ctxt, swc_core::common::SyntaxContext::empty());
+            assert_ne!(errors.0[0].ctxt.outer(), unresolved_mark);
+        });
+    }
 
     #[test]
     fn ts_decoder_handoff_resolves_canonical_values_and_preserves_shadowing() {

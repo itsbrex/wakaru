@@ -19,10 +19,11 @@ use super::decl_utils::{
 };
 use super::eval_utils::{is_direct_eval_call, module_has_with_stmt};
 use super::helper_matcher::{binding_key, ident_matches_binding};
+use super::remove_void::finalize_synthesized_undefined;
 use super::rename_utils::{rename_bindings, BindingId, BindingRename};
 use super::state_machine::{
-    invert_condition, stmts_contain_state_opcode_return, ForwardJumpJoin, IndexLoopContinueMode,
-    OpcodeReturnScan, StateMachineProgram,
+    invert_condition, stmts_contain_state_opcode_return, CatchBindings, ForwardJumpJoin,
+    IndexLoopContinueMode, OpcodeReturnScan, StateMachineProgram,
 };
 use super::transpiler_helper_utils::{
     tslib_member_ts_helper_kind, tslib_require_ts_helper_kind_with_mark, BindingKey,
@@ -63,6 +64,7 @@ impl UnAsyncAwait {
         module.visit_mut_with(&mut UnAsyncAwaitWithHelpers { helpers: &helpers });
         module.visit_mut_with(&mut AwaiterIifeTransformer { helpers: &helpers });
         remove_unused_inline_async_helpers(module, local_helpers);
+        finalize_synthesized_undefined(module, unresolved_mark);
     }
 }
 
@@ -75,6 +77,7 @@ impl VisitMut for UnAsyncAwait {
         module.visit_mut_with(&mut UnAsyncAwaitWithHelpers { helpers: &helpers });
         module.visit_mut_with(&mut AwaiterIifeTransformer { helpers: &helpers });
         remove_unused_inline_async_helpers(module, &local_helpers);
+        finalize_synthesized_undefined(module, self.unresolved_mark);
     }
 
     fn visit_mut_function(&mut self, func: &mut Function) {
@@ -995,16 +998,22 @@ fn decode_state_machine(
     // assigned from `_a.sent()` (`error_1 = _a.sent(); use(error_1)`). We fold
     // that alias back into the synthesized `error` catch binding.
     let mut catch_aliases: Vec<BindingKey> = Vec::new();
+    let folded_aliases: HashSet<Atom> = flat
+        .iter()
+        .filter_map(|(_, stmt)| catch_sent_alias(&state_name, stmt))
+        .map(|(name, _)| name)
+        .collect();
+    let mut catch_bindings = CatchBindings::for_cases(&cases, &folded_aliases);
     for (idx, stmt) in flat {
         if is_standalone_sent(&state_name, &stmt) {
             // Standalone _a.sent(); -- the caller discards the yielded value. Drop.
             continue;
         }
-        let in_catch = is_catch_label(idx, &trys);
-        if !in_catch {
+        let catch_binding = catch_bindings.for_label(idx, &trys);
+        if catch_binding.is_none() {
             catch_aliases.clear();
         }
-        if in_catch {
+        if let Some(catch_binding) = &catch_binding {
             // `error_1 = _a.sent()` aliases the caught value. Record it and drop
             // the assignment; later references resolve to the `error` binding.
             if let Some(alias) = catch_sent_alias(&state_name, &stmt) {
@@ -1015,7 +1024,7 @@ fn decode_state_machine(
             let mut replacer = CatchValueReplacer {
                 state_name: state_name.clone(),
                 aliases: catch_aliases.clone(),
-                replacement: Box::new(Expr::Ident(Ident::new_no_ctxt("error".into(), DUMMY_SP))),
+                replacement: Box::new(Expr::Ident(catch_binding.clone())),
             };
             let mut s = stmt;
             s.visit_mut_with(&mut replacer);
@@ -1071,6 +1080,7 @@ fn decode_state_machine(
     }
 
     let mut recovered = StateMachineProgram::from_labeled_stmts(output, trys)
+        .with_catch_bindings(catch_bindings)
         .recover_conditional_assignments()
         .recover_conditional_branches(OpcodeReturnScan::SkipNestedFunctions)
         .resolve_labeled_forward_jumps(
@@ -1083,10 +1093,6 @@ fn decode_state_machine(
         return None;
     }
     Some(recovered)
-}
-
-fn is_catch_label(label_idx: usize, trys: &[[Option<usize>; 4]]) -> bool {
-    trys.iter().any(|region| region[1] == Some(label_idx))
 }
 
 /// If `stmt` is `ExprStmt(yield X)`, return `(X, delegate, yield_span)`.

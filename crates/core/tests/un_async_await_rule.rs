@@ -2841,3 +2841,42 @@ function read(items) {
 "#;
     assert!(apply_cross_module_facts(input, &facts).contains("yield* items"));
 }
+
+#[test]
+fn catch_binding_avoids_names_the_machine_already_spells() {
+    // The catch body reads an outer `error`, so the synthesized catch parameter
+    // must not take that spelling. The lowered alias `error_1` is folded into
+    // the binding, so its spelling is free to reuse.
+    let input = r#"
+function fetch_items(source, error) {
+  var error_1;
+  return __generator(this, function (_a) {
+    switch (_a.label) {
+      case 0:
+        _a.trys.push([0, 2, , 3]);
+        return [4 /*yield*/, start_fetch(source)];
+      case 1:
+        _a.sent();
+        return [3 /*break*/, 3];
+      case 2:
+        error_1 = _a.sent();
+        handle(error_1, error);
+        return [3 /*break*/, 3];
+      case 3:
+        return [2 /*return*/];
+    }
+  });
+}
+"#;
+    let expected = r#"
+function* fetch_items(source, error) {
+  var error_1;
+  try {
+    yield start_fetch(source);
+  } catch (error_1) {
+    handle(error_1, error);
+  }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
