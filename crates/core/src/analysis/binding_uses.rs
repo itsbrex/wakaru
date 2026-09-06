@@ -49,7 +49,6 @@ pub(crate) struct BindingUseIndex {
     bindings: HashMap<BindingId, BindingInfo>,
     uninitialized: HashSet<BindingId>,
     uninitialized_decls: HashMap<BindingId, UninitializedDecl>,
-    legacy_ident_occurrences: HashMap<BindingId, usize>,
 }
 
 /// An uninitialized declarator (`var x;` / `let x;`) with what a temp proof
@@ -89,18 +88,10 @@ impl BindingUseIndex {
             }
         }
 
-        let mut legacy = LegacyIdentCounter::default();
-        for (index, item) in items.iter().enumerate() {
-            if !excluded_indices.contains(&index) {
-                item.visit_with(&mut legacy);
-            }
-        }
-
         Self {
             bindings: collector.bindings,
             uninitialized: collector.uninitialized,
             uninitialized_decls: collector.uninitialized_decls,
-            legacy_ident_occurrences: legacy.references,
         }
     }
 
@@ -112,9 +103,8 @@ impl BindingUseIndex {
         Self::collect_node(expr)
     }
 
-    /// Collect only bindings with direct writes, without the compatibility
-    /// identifier-count pass used by a full [`BindingUseIndex`]. This keeps
-    /// late declaration-kind rechecks to one read-only AST traversal.
+    /// Collect only bindings with direct writes, without recording the full
+    /// use-site metadata. This keeps late declaration-kind rechecks lightweight.
     pub(crate) fn collect_direct_write_bindings(module: &Module) -> HashSet<BindingId> {
         let mut collector = BindingUseCollector::direct_writes_only();
         module.visit_with(&mut collector);
@@ -123,19 +113,17 @@ impl BindingUseIndex {
 
     fn collect_node<T>(node: &T) -> Self
     where
-        T: VisitWith<BindingUseCollector> + VisitWith<LegacyIdentCounter> + ?Sized,
+        T: VisitWith<BindingUseCollector> + ?Sized,
     {
+        let span = tracing::debug_span!("binding_use_index");
+        let _enter = span.enter();
         let mut collector = BindingUseCollector::default();
         node.visit_with(&mut collector);
-
-        let mut legacy = LegacyIdentCounter::default();
-        node.visit_with(&mut legacy);
 
         Self {
             bindings: collector.bindings,
             uninitialized: collector.uninitialized,
             uninitialized_decls: collector.uninitialized_decls,
-            legacy_ident_occurrences: legacy.references,
         }
     }
 
@@ -181,8 +169,14 @@ impl BindingUseIndex {
 
     /// Compatibility count for older rules that intentionally count declaration
     /// identifiers as occurrences. New consumers should prefer `use_count`.
-    pub(crate) fn legacy_reference_counts(&self) -> HashMap<BindingId, usize> {
-        self.legacy_ident_occurrences.clone()
+    /// Collect this separately so consumers of classified uses do not pay for
+    /// another traversal and a count map they never read.
+    pub(crate) fn collect_legacy_reference_counts(module: &Module) -> HashMap<BindingId, usize> {
+        let span = tracing::debug_span!("legacy_binding_reference_counts");
+        let _enter = span.enter();
+        let mut legacy = LegacyIdentCounter::default();
+        module.visit_with(&mut legacy);
+        legacy.references
     }
 
     pub(crate) fn referenced_bindings(&self) -> HashSet<BindingId> {
@@ -1052,6 +1046,11 @@ mod tests {
         let tmp = binding(&module, "tmp");
 
         assert_eq!(index.use_count(&tmp), 2);
-        assert_eq!(index.legacy_reference_counts().get(&tmp).copied(), Some(3));
+        assert_eq!(
+            BindingUseIndex::collect_legacy_reference_counts(&module)
+                .get(&tmp)
+                .copied(),
+            Some(3)
+        );
     }
 }

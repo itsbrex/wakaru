@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use swc_core::atoms::Atom;
@@ -211,11 +212,22 @@ impl VisitMut for UnEsm {
         let unresolved_reference_names =
             collect_unresolved_reference_names(module, self.unresolved_mark);
         let all_declared_names = collect_all_declared_names(module);
-        let binding_uses = BindingUseIndex::collect(module);
-        let commonjs_read_recovery =
-            collect_commonjs_read_recovery_evidence(module, self.unresolved_mark, &binding_uses);
-        let require_bindings =
-            collect_stable_require_bindings(module, &binding_uses, self.unresolved_mark);
+        // The name inventory already proves whether any CommonJS runtime
+        // binding exists. Pure ESM still needs import ordering and export
+        // cleanup below, but cannot use any of these CommonJS proofs.
+        let (binding_uses, commonjs_read_recovery, require_bindings) =
+            if ["require", "exports", "module"]
+                .iter()
+                .any(|name| unresolved_reference_names.contains(&Atom::from(*name)))
+            {
+                let uses = BindingUseIndex::collect(module);
+                let evidence =
+                    collect_commonjs_read_recovery_evidence(module, self.unresolved_mark, &uses);
+                let requires = collect_stable_require_bindings(module, &uses, self.unresolved_mark);
+                (uses, evidence, requires)
+            } else {
+                Default::default()
+            };
 
         let items = std::mem::take(&mut module.body);
 
@@ -2109,6 +2121,15 @@ fn get_or_insert<'a>(
 /// perform arbitrary work. The require binding must also have no uses outside
 /// this adjacent pair before it is replaced with a native live re-export.
 fn rewrite_commonjs_export_star_loops(module: &mut Module, unresolved_mark: Mark) {
+    // Match the local shape before building a whole-module use index. Most
+    // modules (especially later UnEsm passes) have no export-star loop.
+    if !module.body.windows(2).any(|pair| {
+        extract_single_require_binding(&pair[0], unresolved_mark).is_some_and(|(binding, _, _)| {
+            is_commonjs_export_star_loop(&pair[1], &binding, unresolved_mark)
+        })
+    }) {
+        return;
+    }
     let binding_uses = BindingUseIndex::collect(module);
     let mut body = std::mem::take(&mut module.body).into_iter().peekable();
     let mut rewritten = Vec::with_capacity(body.size_hint().0);
@@ -4879,7 +4900,7 @@ fn collect_default_only_inline_interop_bindings(
     module: &Module,
     unresolved_mark: Mark,
 ) -> HashSet<BindingId> {
-    let uses = BindingUseIndex::collect(module);
+    let uses = OnceCell::new();
     let mut bindings = HashSet::new();
 
     for (item_idx, item) in module.body.iter().enumerate() {
@@ -4902,6 +4923,7 @@ fn collect_default_only_inline_interop_bindings(
             continue;
         };
 
+        let uses = uses.get_or_init(|| BindingUseIndex::collect(module));
         let wrapper_id = binding_id(&wrapper.id);
         let require_id = binding_id(&require_local);
         if wrapper_id != require_id
@@ -5875,6 +5897,15 @@ fn lower_exported_cjs_requires(module: &mut Module, unresolved_mark: Mark) {
 /// capture into an import. Object patterns use the same whole-value capture so
 /// the original destructuring binding remains local.
 fn preserve_written_cjs_require_bindings(module: &mut Module, unresolved_mark: Mark) {
+    if !module.body.iter().any(|item| {
+        let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
+            return false;
+        };
+        var.decls.len() == 1
+            && try_classify_cjs_require_declarator(&var.decls[0], unresolved_mark).is_some()
+    }) {
+        return;
+    }
     let uses = BindingUseIndex::collect(module);
     let mut used_names = collect_all_identifier_names(module);
     let mut new_body = Vec::with_capacity(module.body.len());
@@ -6693,6 +6724,42 @@ fn rename_export_kind(kind: &mut CjsExportKind, renames: &[BindingRename]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unmatched_commonjs_prepasses_do_not_build_binding_use_indexes() {
+        let (_, spans) = crate::test_tracing::record_spans(|| {
+            swc_core::common::GLOBALS.set(&Default::default(), || {
+                let mut module = crate::unpacker::parse_es_module(
+                    "import { value } from 'source'; var copy = value; \
+                     function nested(require) { var local = require('other'); return local; } \
+                     var ordinary = makeValue(); use(copy, ordinary, nested);",
+                    "no-commonjs-candidate.js",
+                    Default::default(),
+                )
+                .unwrap();
+                let unresolved_mark = Mark::new();
+                module.visit_mut_with(&mut swc_core::ecma::transforms::base::resolver(
+                    unresolved_mark,
+                    Mark::new(),
+                    false,
+                ));
+                let original = module.clone();
+                rewrite_commonjs_export_star_loops(&mut module, unresolved_mark);
+                preserve_written_cjs_require_bindings(&mut module, unresolved_mark);
+                assert!(
+                    collect_default_only_inline_interop_bindings(&module, unresolved_mark)
+                        .is_empty()
+                );
+                assert_eq!(module, original);
+                module.visit_mut_with(&mut UnEsm::new(unresolved_mark, RewriteLevel::Standard));
+                assert_eq!(module, original);
+            });
+        });
+        assert!(
+            !spans.iter().any(|name| name == "binding_use_index"),
+            "a module without a candidate must not pay for full binding analysis: {spans:?}"
+        );
+    }
 
     #[test]
     fn default_import_fallback_uses_delimited_suffixes() {

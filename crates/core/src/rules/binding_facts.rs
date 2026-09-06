@@ -27,6 +27,6 @@ pub(crate) fn collect_binding_facts(module: &Module) -> BindingFacts {
     BindingFacts {
         uninitialized: index.uninitialized_bindings(),
         assignable_uninitialized: index.assignable_uninitialized_bindings(),
-        references: index.legacy_reference_counts(),
+        references: BindingUseIndex::collect_legacy_reference_counts(module),
     }
 }

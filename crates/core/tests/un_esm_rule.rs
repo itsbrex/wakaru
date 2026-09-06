@@ -4133,3 +4133,29 @@ fn swc_async_runtime_namespace_conversion_requires_exact_unresolved_require() {
         assert!(!apply_unesm(input).contains("import * as helper"));
     }
 }
+
+#[test]
+fn esm_only_modules_keep_import_ordering_and_export_cleanup() {
+    let input = r#"
+import { first } from "a";
+use(first);
+import { second } from "b";
+import { third } from "a";
+var value = makeValue();
+export { value };
+var alias = value;
+export default alias;
+"#;
+    let expected = r#"
+import { first } from "a";
+import { third } from "a";
+import { second } from "b";
+use(first);
+export var value = makeValue();
+export default value;
+"#;
+    let output = common::render_rule(input, |mark| {
+        wakaru_core::rules::UnEsm::new(mark, RewriteLevel::Standard)
+    });
+    assert_eq_normalized(&output, expected);
+}

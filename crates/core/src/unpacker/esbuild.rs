@@ -1,7 +1,10 @@
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
-use swc_core::common::{sync::Lrc, Mark, SourceMap, Span, Spanned, SyntaxContext, DUMMY_SP};
+use swc_core::common::{
+    sync::Lrc, Mark, SourceMap, Span, Spanned, SyntaxContext, DUMMY_SP, GLOBALS,
+};
 use swc_core::ecma::ast::{
     ArrowExpr, ArrowFunctionBody, AssignExpr, AssignOp, AssignTarget, AssignTargetPat,
     BindingIdent, Bool, CallExpr, Callee, ClassDecl, Decl, ExportDecl, ExportSpecifier, Expr,
@@ -1803,23 +1806,28 @@ fn collect_top_level_decl_references(
     top_level_bindings: &HashSet<BindingId>,
     ignored_atoms: &HashSet<Atom>,
 ) -> HashMap<BindingId, HashSet<BindingId>> {
-    let mut references = HashMap::new();
-    for (binding, index) in decl_indices {
-        if ignored_atoms.contains(&binding.0) {
-            continue;
-        }
-        let owned_atoms = HashSet::from([binding.0.clone()]);
-        let Some(item) = filter_item_to_owned_bindings(&items[*index], &owned_atoms) else {
-            continue;
-        };
-        let mut collector = TopLevelRefCollector {
-            top_level_bindings,
-            references: HashSet::new(),
-        };
-        item.visit_with(&mut collector);
-        references.insert(binding.clone(), collector.references);
-    }
-    references
+    // Each ownership query reads the same resolved tree and produces an
+    // independent map entry. Keep the caller's hygiene context on workers.
+    GLOBALS.with(|globals| {
+        decl_indices
+            .par_iter()
+            .filter_map(|(binding, index)| {
+                GLOBALS.set(globals, || {
+                    if ignored_atoms.contains(&binding.0) {
+                        return None;
+                    }
+                    let owned_atoms = HashSet::from([binding.0.clone()]);
+                    let item = filter_item_to_owned_bindings(&items[*index], &owned_atoms)?;
+                    let mut collector = TopLevelRefCollector {
+                        top_level_bindings,
+                        references: HashSet::new(),
+                    };
+                    item.visit_with(&mut collector);
+                    Some((binding.clone(), collector.references))
+                })
+            })
+            .collect()
+    })
 }
 
 fn collect_top_level_decl_writes(
@@ -1827,16 +1835,19 @@ fn collect_top_level_decl_writes(
     decl_indices: &HashMap<BindingId, usize>,
     top_level_bindings: &HashSet<BindingId>,
 ) -> HashMap<BindingId, HashSet<BindingId>> {
-    let mut writes = HashMap::new();
-    for (binding, index) in decl_indices {
-        let owned_atoms = HashSet::from([binding.0.clone()]);
-        let Some(item) = filter_item_to_owned_bindings(&items[*index], &owned_atoms) else {
-            continue;
-        };
-        let binding_writes = exact_write_bindings_for_item(&item, top_level_bindings);
-        writes.insert(binding.clone(), binding_writes);
-    }
-    writes
+    GLOBALS.with(|globals| {
+        decl_indices
+            .par_iter()
+            .filter_map(|(binding, index)| {
+                GLOBALS.set(globals, || {
+                    let owned_atoms = HashSet::from([binding.0.clone()]);
+                    let item = filter_item_to_owned_bindings(&items[*index], &owned_atoms)?;
+                    let binding_writes = exact_write_bindings_for_item(&item, top_level_bindings);
+                    Some((binding.clone(), binding_writes))
+                })
+            })
+            .collect()
+    })
 }
 
 fn exact_write_bindings_for_item(
@@ -5846,11 +5857,21 @@ fn filter_decl_to_owned_bindings(decl: &Decl, owned_atoms: &HashSet<Atom>) -> Op
                 .iter()
                 .any(|decl| pat_declares_owned(&decl.name, &keep_atoms))
             {
-                let mut filtered = var_decl.clone();
-                filtered
-                    .decls
-                    .retain(|decl| pat_declares_owned(&decl.name, &keep_atoms));
-                Some(Decl::Var(filtered))
+                // A minified declaration can contain many large sibling
+                // initializers. Clone only the selected ownership unit, not
+                // every sibling followed by dropping the rejected subtrees.
+                Some(Decl::Var(Box::new(VarDecl {
+                    span: var_decl.span,
+                    ctxt: var_decl.ctxt,
+                    kind: var_decl.kind,
+                    declare: var_decl.declare,
+                    decls: var_decl
+                        .decls
+                        .iter()
+                        .filter(|decl| pat_declares_owned(&decl.name, &keep_atoms))
+                        .cloned()
+                        .collect(),
+                })))
             } else {
                 None
             }
@@ -6035,6 +6056,88 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(module_pairs(owned), module_pairs(borrowed));
+    }
+
+    #[test]
+    fn owned_destructuring_keeps_sibling_dependencies_and_declaration_metadata() {
+        GLOBALS.set(&Default::default(), || {
+            let mut module = super::super::parse_es_module(
+                "let discarded = function () { return unrelated; }, dependency = value, \
+                 { left = dependency, right } = source, trailing = other;",
+                "owned-destructuring.js",
+                Default::default(),
+            )
+            .unwrap();
+            module.visit_mut_with(&mut resolver(Mark::new(), Mark::new(), false));
+            let ModuleItem::Stmt(Stmt::Decl(Decl::Var(original))) = &module.body[0] else {
+                panic!("expected variable declaration");
+            };
+            let filtered = filter_item_to_owned_bindings(
+                &module.body[0],
+                &HashSet::from([Atom::from("left")]),
+            )
+            .unwrap();
+            let ModuleItem::Stmt(Stmt::Decl(Decl::Var(filtered))) = filtered else {
+                panic!("expected filtered variable declaration");
+            };
+            assert_eq!(filtered.span, original.span);
+            assert_eq!(filtered.ctxt, original.ctxt);
+            assert_eq!(filtered.kind, original.kind);
+            assert_eq!(filtered.declare, original.declare);
+            assert_eq!(filtered.decls, original.decls[1..3]);
+            assert_eq!(original.decls.len(), 4);
+        });
+    }
+
+    #[test]
+    fn declaration_metadata_is_independent_of_worker_count() {
+        GLOBALS.set(&Default::default(), || {
+            let mut source = String::from("var state = 0, shared = 1, shadowed = 2; ");
+            for index in 0..128 {
+                source.push_str(&format!(
+                    "var value{index} = shared, writer{index} = function (shadowed) {{ \
+                     state += value{index}; return shadowed; }}; "
+                ));
+            }
+            let mut module =
+                super::super::parse_es_module(&source, "parallel-metadata.js", Default::default())
+                    .unwrap();
+            module.visit_mut_with(&mut resolver(Mark::new(), Mark::new(), false));
+            let bindings = module
+                .body
+                .iter()
+                .flat_map(module_item_declared_binding_ids)
+                .collect::<HashSet<_>>();
+            let indices = collect_top_level_decl_indices(&module.body);
+            let collect = |threads| {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap();
+                GLOBALS.with(|globals| {
+                    pool.install(|| {
+                        GLOBALS.set(globals, || {
+                            (
+                                collect_top_level_decl_references(
+                                    &module.body,
+                                    &indices,
+                                    &bindings,
+                                    &HashSet::new(),
+                                ),
+                                collect_top_level_decl_writes(&module.body, &indices, &bindings),
+                            )
+                        })
+                    })
+                })
+            };
+            let single = collect(1);
+            assert_eq!(single, collect(4));
+            let binding = |name: &str| bindings.iter().find(|id| id.0 == name).unwrap();
+            let writer = binding("writer0");
+            assert!(single.0[writer].contains(binding("value0")));
+            assert!(!single.0[writer].contains(binding("shadowed")));
+            assert!(single.1[writer].contains(binding("state")));
+        });
     }
 
     #[test]
