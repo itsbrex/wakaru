@@ -21,6 +21,7 @@ use super::cross_module_helper_refs::{
     collect_cross_module_helper_refs, collect_cross_module_ts_helper_refs,
     cross_module_member_helper_kind,
 };
+use super::decl_utils::fresh_binding_ident;
 use super::helper_matcher::{
     binding_key, member_prop_name, remaining_refs_outside_declarations,
     remove_fn_decls_from_body_by_binding, remove_import_specifiers_by_binding,
@@ -1900,7 +1901,7 @@ impl ObjectRestProcessor<'_> {
         };
         let name = find_non_conflicting_alias("rest", conflicts, &HashSet::new());
         let binding = BindingIdent {
-            id: Ident::new_no_ctxt(name, ret.span),
+            id: fresh_binding_ident(name, ret.span),
             type_ann: None,
         };
         let pattern = build_rest_destructuring(

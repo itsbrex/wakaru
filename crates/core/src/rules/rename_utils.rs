@@ -73,6 +73,17 @@ pub(crate) fn collect_unresolved_reference_names(
                 self.names.insert(ident.sym.clone());
             }
         }
+
+        fn visit_jsx_element_name(&mut self, name: &swc_core::ecma::ast::JSXElementName) {
+            // A lowercase element name is an intrinsic tag string, not a
+            // reference, even though the resolver stamps it with the
+            // unresolved mark.
+            match name {
+                swc_core::ecma::ast::JSXElementName::Ident(ident)
+                    if starts_with_lowercase(&ident.sym) => {}
+                _ => name.visit_children_with(self),
+            }
+        }
     }
 
     let mut collector = Collector {
@@ -83,17 +94,6 @@ pub(crate) fn collect_unresolved_reference_names(
     collector.names
 }
 
-/// Collect local bindings whose public names are pinned to the binding name
-/// by an export *declaration* (`export const X` / `export function X` /
-/// `export class X`): renaming those would change the module's public API.
-///
-/// Bindings that only appear in export *specifiers* (`export { c }`,
-/// `export { c as Z }`) are deliberately not collected: `BindingRenamer`
-/// preserves the public name by rewriting the specifier and inserting an
-/// alias when needed (`export { NewName as c }`), so renaming the local is
-/// safe and keeps readability. Default exports are likewise excluded —
-/// renaming the local of `export default function f() {}` does not change
-/// the public name `default`.
 /// Like [`collect_unresolved_reference_names`], but only names that are real
 /// free references. The resolver visits export specifiers with
 /// `IdentType::Ref`, so the *exported* half of `export { o as compute }` and
@@ -113,6 +113,17 @@ pub(crate) fn collect_free_reference_names(
         fn visit_ident(&mut self, ident: &Ident) {
             if ident.ctxt.outer() == self.unresolved_mark {
                 self.names.insert(ident.sym.clone());
+            }
+        }
+
+        fn visit_jsx_element_name(&mut self, name: &swc_core::ecma::ast::JSXElementName) {
+            // A lowercase element name is an intrinsic tag string, not a
+            // reference, even though the resolver stamps it with the
+            // unresolved mark.
+            match name {
+                swc_core::ecma::ast::JSXElementName::Ident(ident)
+                    if starts_with_lowercase(&ident.sym) => {}
+                _ => name.visit_children_with(self),
             }
         }
 
@@ -143,6 +154,17 @@ pub(crate) fn collect_free_reference_names(
     collector.names
 }
 
+/// Collect local bindings whose public names are pinned to the binding name
+/// by an export *declaration* (`export const X` / `export function X` /
+/// `export class X`): renaming those would change the module's public API.
+///
+/// Bindings that only appear in export *specifiers* (`export { c }`,
+/// `export { c as Z }`) are deliberately not collected: `BindingRenamer`
+/// preserves the public name by rewriting the specifier and inserting an
+/// alias when needed (`export { NewName as c }`), so renaming the local is
+/// safe and keeps readability. Default exports are likewise excluded —
+/// renaming the local of `export default function f() {}` does not change
+/// the public name `default`.
 pub(crate) fn collect_exported_binding_ids(module: &Module) -> HashSet<BindingId> {
     collect_exported_binding_ids_from_items(&module.body)
 }
@@ -986,6 +1008,72 @@ mod tests {
             module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
             f(&module)
         })
+    }
+
+    fn with_resolved_module<R>(source: &str, f: impl FnOnce(&Module, Mark) -> R) -> R {
+        GLOBALS.set(&Default::default(), || {
+            let cm: Lrc<SourceMap> = Default::default();
+            let fm = cm.new_source_file(
+                FileName::Custom("test.js".to_string()).into(),
+                source.to_string(),
+            );
+            let lexer = Lexer::new(
+                Syntax::Es(EsSyntax {
+                    jsx: true,
+                    ..Default::default()
+                }),
+                Default::default(),
+                StringInput::from(&*fm),
+                None,
+            );
+            let mut module = Parser::new_from(lexer)
+                .parse_module()
+                .expect("failed to parse");
+            let unresolved_mark = Mark::new();
+            module.visit_mut_with(&mut resolver(unresolved_mark, Mark::new(), false));
+            f(&module, unresolved_mark)
+        })
+    }
+
+    #[test]
+    fn free_name_collectors_skip_intrinsic_jsx_tags() {
+        let source = r#"const x = <a href="/">{foo}</a>; const y = <Bar />;"#;
+        with_resolved_module(source, |module, unresolved_mark| {
+            for names in [
+                collect_unresolved_reference_names(module, unresolved_mark),
+                collect_free_reference_names(module, unresolved_mark),
+            ] {
+                assert!(names.contains(&Atom::from("foo")));
+                assert!(names.contains(&Atom::from("Bar")));
+                assert!(
+                    !names.contains(&Atom::from("a")),
+                    "an intrinsic tag is not a reference: {names:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn free_reference_names_skip_export_specifier_names() {
+        let source = r#"
+const o = 1;
+export { o as compute };
+export * as ns from "./x";
+use(globalName);
+"#;
+        with_resolved_module(source, |module, unresolved_mark| {
+            // The resolver visits the exported half as a reference, so the plain
+            // collector reports it; the free-reference collector must not.
+            let unresolved = collect_unresolved_reference_names(module, unresolved_mark);
+            assert!(unresolved.contains(&Atom::from("compute")));
+
+            let free = collect_free_reference_names(module, unresolved_mark);
+            assert!(free.contains(&Atom::from("globalName")));
+            assert!(free.contains(&Atom::from("use")));
+            assert!(!free.contains(&Atom::from("compute")));
+            assert!(!free.contains(&Atom::from("ns")));
+            assert!(!free.contains(&Atom::from("o")));
+        });
     }
 
     #[test]

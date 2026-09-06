@@ -12,7 +12,7 @@ use swc_core::ecma::ast::{
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
-use super::decl_utils::collect_decl_names;
+use super::decl_utils::{collect_decl_names, fresh_binding_ident};
 use super::eval_utils::{
     direct_eval_call_source, js_source_mentions_binding, DirectEvalAnalyzer, EvalCallSource,
 };
@@ -817,7 +817,7 @@ fn parse_exported_enum_arg(expr: &Expr, unresolved_mark: Mark) -> Option<(Ident,
     };
     let public_name = unresolved_exports_member(left_member, unresolved_mark)?;
     if assign_member_empty_object(right, &public_name, unresolved_mark) {
-        let local_ident = Ident::new_no_ctxt(public_name.clone(), DUMMY_SP);
+        let local_ident = fresh_binding_ident(public_name.clone(), DUMMY_SP);
         Some((local_ident, public_name, true))
     } else {
         None

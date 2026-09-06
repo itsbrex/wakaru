@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use swc_core::atoms::Atom;
-use swc_core::common::{SyntaxContext, DUMMY_SP};
+use swc_core::common::{Mark, Span, SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
     BindingIdent, Decl, Expr, Function, FunctionBody, Id, Ident, Lit, MethodKind, ObjectLit, Param,
     Pat, Prop, PropName, PropOrSpread, Stmt, VarDecl, VarDeclKind,
@@ -12,6 +12,14 @@ use swc_core::ecma::visit::{Visit, VisitWith};
 use crate::utils::paren::strip_parens;
 
 pub(crate) use crate::analysis::{binding_id, ident_matches_binding, BindingId};
+
+/// A binding identifier a rule introduces. It gets a context of its own so
+/// later rules see one binding, distinct from every authored or synthesized
+/// name that shares the spelling. Printed JavaScript has no context, so the
+/// caller still proves the emitted name is free at the insertion site.
+pub(crate) fn fresh_binding_ident(sym: Atom, span: Span) -> Ident {
+    Ident::new(sym, span, SyntaxContext::empty().apply_mark(Mark::new()))
+}
 
 pub fn same_ident(left: &Ident, right: &Ident) -> bool {
     left.sym == right.sym && left.ctxt == right.ctxt
@@ -71,7 +79,7 @@ pub(crate) fn ensure_setter_has_value_param(function: &mut Function) {
         span: DUMMY_SP,
         decorators: vec![],
         pat: Pat::Ident(BindingIdent {
-            id: Ident::new(name, DUMMY_SP, SyntaxContext::empty()),
+            id: fresh_binding_ident(name, DUMMY_SP),
             type_ann: None,
         }),
     });
@@ -407,4 +415,22 @@ where
                 && matches!(&decl.name, Pat::Ident(binding) if matches_ident(&binding.id, target))
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use swc_core::common::{Globals, GLOBALS};
+
+    use super::*;
+
+    #[test]
+    fn fresh_binding_ident_has_its_own_non_root_context() {
+        GLOBALS.set(&Globals::new(), || {
+            let first = fresh_binding_ident("tmp".into(), DUMMY_SP);
+            let second = fresh_binding_ident("tmp".into(), DUMMY_SP);
+            assert_eq!(first.sym, second.sym);
+            assert_ne!(first.ctxt, SyntaxContext::empty());
+            assert_ne!(first.ctxt, second.ctxt);
+        });
+    }
 }

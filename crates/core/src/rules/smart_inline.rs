@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
-use swc_core::common::{Mark, Span, Spanned, SyntaxContext, DUMMY_SP};
+use swc_core::common::{Mark, Span, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayPat, ArrowExpr, ArrowFunctionBody, AssignExpr, AssignOp, AssignTarget, BindingIdent,
     Callee, CatchClause, ComputedPropName, Constructor, Decl, Expr, ExprStmt, ForInStmt, ForOfStmt,
@@ -19,8 +19,8 @@ use super::builtin_aliases::{
     inline_builtin_aliases_stmts, inline_module_builtin_aliases, BuiltinAliasInlineOptions,
 };
 use super::decl_utils::{
-    can_remove_prior_uninitialized_decls, remove_prior_uninitialized_decls, same_ident,
-    UninitializedDeclKind,
+    can_remove_prior_uninitialized_decls, fresh_binding_ident, remove_prior_uninitialized_decls,
+    same_ident, UninitializedDeclKind,
 };
 use super::eval_utils::is_direct_eval_call;
 use super::helper_matcher::BindingKey;
@@ -2384,7 +2384,7 @@ fn flush_property_group(result: &mut Vec<Stmt>, obj: Ident, accesses: Vec<Access
                 props.push(ObjectPatProp::Assign(swc_core::ecma::ast::AssignPatProp {
                     span: DUMMY_SP,
                     key: BindingIdent {
-                        id: Ident::new(prop_sym, DUMMY_SP, SyntaxContext::empty()),
+                        id: fresh_binding_ident(prop_sym, DUMMY_SP),
                         type_ann: None,
                     },
                     value: None,

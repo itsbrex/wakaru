@@ -309,9 +309,11 @@ fn run_un_template_literal(module: &mut Module, ctx: RuleRunContext<'_>) {
 }
 runner!(run_un_while_loop, UnWhileLoop);
 runner!(run_un_type_constructor, |ctx| UnTypeConstructor::new(
+    ctx.unresolved_mark,
     ctx.rewrite_level
 ));
 runner!(run_un_builtin_prototype, |ctx| UnBuiltinPrototype::new(
+    ctx.unresolved_mark,
     ctx.rewrite_level
 ));
 runner!(run_un_argument_spread, |ctx| UnArgumentSpread::new(

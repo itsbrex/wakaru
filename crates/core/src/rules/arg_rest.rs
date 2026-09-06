@@ -10,8 +10,8 @@ use swc_core::ecma::ast::{
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
 use super::decl_utils::{
-    binding_id, contains_use_strict_string_statement, has_direct_use_strict_directive,
-    ident_matches_binding, BindingId,
+    binding_id, contains_use_strict_string_statement, fresh_binding_ident,
+    has_direct_use_strict_directive, ident_matches_binding, BindingId,
 };
 use super::rename_utils::{rename_bindings, BindingRename};
 use super::RewriteLevel;
@@ -680,7 +680,7 @@ fn prepare_rest_ident<P: VisitWith<IdentNameCollector>>(
     let preferred = copy.map_or_else(|| Atom::from("args"), |ident| ident.sym.clone());
     let name = fresh_rest_name(body, params, preferred, copy.map(binding_id));
     let Some(copy) = copy else {
-        return Ident::new_no_ctxt(name, DUMMY_SP);
+        return fresh_binding_ident(name, DUMMY_SP);
     };
     if name != copy.sym {
         rename_bindings(

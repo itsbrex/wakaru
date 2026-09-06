@@ -17,7 +17,7 @@ use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 use crate::analysis::binding_uses::BindingUseIndex;
 use crate::js_names::to_valid_identifier_name;
 
-use super::decl_utils::BindingId;
+use super::decl_utils::{fresh_binding_ident, BindingId};
 use super::rename_utils::{
     collect_exported_binding_ids_from_items, rename_bindings, starts_with_lowercase, BindingRename,
 };
@@ -310,7 +310,7 @@ impl UnJsx {
 
     fn create_component_alias(&mut self, expr: &Expr, base: &str) -> Ident {
         let name = self.generate_name(base.to_string());
-        let ident = Ident::new(name.clone().into(), DUMMY_SP, SyntaxContext::empty());
+        let ident = fresh_binding_ident(name.clone().into(), DUMMY_SP);
         if let Some(pending) = self.pending_stmts.last_mut() {
             pending.push(Stmt::Decl(Decl::Var(Box::new(VarDecl {
                 span: DUMMY_SP,
@@ -353,7 +353,7 @@ impl UnJsx {
 
     fn to_jsx_element_name(&self, expr: &Expr) -> Option<JSXElementName> {
         match expr {
-            Expr::Lit(Lit::Str(s)) => jsx_name_from_string(s),
+            Expr::Lit(Lit::Str(s)) => jsx_name_from_string(s, self.unresolved_mark),
             Expr::Ident(ident) => Some(JSXElementName::Ident(ident.clone())),
             Expr::Member(member) => self.member_expr_to_jsx_name(member),
             _ => None,
@@ -1403,7 +1403,9 @@ fn is_capitalization_invalid(expr: &Expr) -> bool {
     }
 }
 
-fn jsx_name_from_string(value: &Str) -> Option<JSXElementName> {
+/// The resolver gives a lowercase element name the unresolved mark (it is an
+/// intrinsic tag, not a binding); a name built from a string follows suit.
+fn jsx_name_from_string(value: &Str, unresolved_mark: Mark) -> Option<JSXElementName> {
     let value_string = wtf8_to_string(&value.value);
     if let Some((ns, name)) = value_string.split_once(':') {
         return Some(JSXElementName::JSXNamespacedName(JSXNamespacedName {
@@ -1412,10 +1414,15 @@ fn jsx_name_from_string(value: &Str) -> Option<JSXElementName> {
             name: name.into(),
         }));
     }
+    let ctxt = if value_string.starts_with(|c: char| c.is_ascii_lowercase()) {
+        SyntaxContext::empty().apply_mark(unresolved_mark)
+    } else {
+        SyntaxContext::empty()
+    };
     Some(JSXElementName::Ident(Ident::new(
         value_string.into(),
         DUMMY_SP,
-        SyntaxContext::empty(),
+        ctxt,
     )))
 }
 
@@ -1708,4 +1715,54 @@ fn wtf8_to_string(value: &Wtf8Atom) -> String {
         .as_str()
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| value.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use swc_core::common::{sync::Lrc, Globals, Mark, SourceMap, GLOBALS};
+    use swc_core::ecma::transforms::base::resolver;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct TagNames(Vec<Ident>);
+
+    impl Visit for TagNames {
+        fn visit_jsx_element_name(&mut self, name: &JSXElementName) {
+            if let JSXElementName::Ident(ident) = name {
+                self.0.push(ident.clone());
+            }
+        }
+    }
+
+    #[test]
+    fn intrinsic_tag_built_from_a_string_carries_the_unresolved_mark() {
+        GLOBALS.set(&Globals::new(), || {
+            let cm: Lrc<SourceMap> = Default::default();
+            let source = r#"
+import React from "react";
+const el = React.createElement("div", null, "hi");
+"#;
+            let mut module = crate::unpacker::parse_es_module(source, "fixture.js", cm)
+                .expect("fixture should parse");
+            let unresolved_mark = Mark::new();
+            module.visit_mut_with(&mut resolver(unresolved_mark, Mark::new(), false));
+
+            module.visit_mut_with(&mut UnJsx::new(unresolved_mark));
+
+            let mut tags = TagNames::default();
+            module.visit_with(&mut tags);
+            // Opening and closing tag both carry the name.
+            assert_eq!(
+                tags.0.len(),
+                2,
+                "expected one JSX element, got {:?}",
+                tags.0
+            );
+            for div in &tags.0 {
+                assert_eq!(div.sym.as_ref(), "div");
+                assert_eq!(div.ctxt.outer(), unresolved_mark);
+            }
+        });
+    }
 }

@@ -13,7 +13,8 @@ use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 use crate::js_names::{is_likely_generated_alias, is_reserved_binding_name};
 
 use super::decl_utils::{
-    contains_use_strict_string_statement, has_direct_use_strict_directive, same_ident,
+    contains_use_strict_string_statement, fresh_binding_ident, has_direct_use_strict_directive,
+    same_ident,
 };
 use super::eval_utils::{js_source_mentions_binding, DirectEvalAnalyzer};
 use super::rename_utils::{rename_bindings, BindingRename};
@@ -3354,7 +3355,7 @@ fn make_ident_param(name: Atom) -> Param {
         span: DUMMY_SP,
         decorators: Vec::new(),
         pat: Pat::Ident(BindingIdent {
-            id: Ident::new_no_ctxt(name, DUMMY_SP),
+            id: fresh_binding_ident(name, DUMMY_SP),
             type_ann: None,
         }),
     }
@@ -3532,7 +3533,7 @@ impl InlineArgumentsDefaultRewriter<'_> {
     fn preferred_param_ident(&self, idx: usize) -> Ident {
         self.param_name_candidate(idx)
             .map(|candidate| candidate.ident.clone())
-            .unwrap_or_else(|| Ident::new_no_ctxt(placeholder_name(idx), DUMMY_SP))
+            .unwrap_or_else(|| fresh_binding_ident(placeholder_name(idx), DUMMY_SP))
     }
 
     fn mark_param_name_consumed(&mut self, idx: usize) {

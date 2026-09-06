@@ -325,9 +325,12 @@ normal constructor.
   rewrite replaces `R.foo` with a reference to an *existing* local, stamp the
   existing local's ctxt on the new ident — otherwise later `(sym, ctxt)` passes
   (e.g. `UnImportRename` Stage 6) will rename the binding + original usages but
-  miss yours, leaving an undefined reference. For newly-created import
-  specifiers, `SyntaxContext::empty()` on both binding and usage is fine (they
-  match each other and the resolver isn't re-run).
+  miss yours, leaving an undefined reference. A newly created binding (an
+  import local, an alias) gets its own context from
+  `decl_utils::fresh_binding_ident`; clone that ident for its usages so binding
+  and references share it. The resolver isn't re-run, so a context that is
+  merely equal on both sides also matches, but every empty-context binding in
+  the module then shares one identity.
 
 ## Non-goals
 
