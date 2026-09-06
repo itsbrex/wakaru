@@ -1030,6 +1030,55 @@ fn decompile_rejects_directory_input() {
 }
 
 #[test]
+fn unpack_output_survives_worker_pool_teardown_and_reuse() {
+    let dir = temp_test_dir("unpack-worker-lifetime");
+    fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("bundle.js");
+    let mut source = String::from(
+        "var wrap = (q, K) => () => (K || q((K = { exports: {} }).exports, K), K.exports); ",
+    );
+    for index in 0..64 {
+        source.push_str(&format!(
+            "var value{index} = wrap((exports, module) => {{ module.exports = {index}; }}); ",
+        ));
+    }
+    source.push_str("console.log(value0(), value63());");
+    fs::write(&input, source).unwrap();
+
+    let unpack_on_workers = |workers| {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        let result = pool.install(|| {
+            run_public_unpack(
+                std::slice::from_ref(&input),
+                false,
+                UnpackMode::Strict,
+                DceMode::Off,
+                RewriteLevel::Standard,
+                false,
+                false,
+            )
+            .unwrap()
+        });
+        drop(pool);
+        // Consume and later free worker-allocated output after the pool owner
+        // is gone. Repeat with fresh pools to exercise allocator thread reuse.
+        let mut modules = result.output.modules;
+        modules.sort();
+        assert!(modules.len() >= 64);
+        assert!(modules.iter().all(|(_, code)| !code.is_empty()));
+        modules
+    };
+    let expected = unpack_on_workers(1);
+    for workers in [4, 2, 4] {
+        assert_eq!(unpack_on_workers(workers), expected);
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn unpack_directory_inputs_are_recursive_detected_js_files_only() {
     let dir = temp_test_dir("unpack-dir");
     let nested = dir.join("nested");

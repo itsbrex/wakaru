@@ -24,3 +24,4 @@ sourcemap.workspace = true
 tracing.workspace = true
 tracing-chrome = "0.7"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
+mimalloc = "0.1.52"

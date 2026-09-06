@@ -59,6 +59,12 @@ because Cargo requires packaged dependencies in the registry. Its driver and
 AST types are not a supported semver contract. See [public-api.md](public-api.md)
 for integration boundaries.
 
+The native CLI selects mimalloc for Rust allocations to reduce the cost of
+allocating and freeing AST nodes across worker threads. This choice lives in
+`crates/cli/src/main.rs`; the Rust façade, core library, and WASM crate do not
+install an allocator for their callers. Building the CLI requires a native
+C/C++ toolchain for the allocator dependency; see [Testing](testing.md).
+
 ### Bun single-file executable containers (`crates/wakaru/src/bun.rs`)
 
 Bun single-file PE, Mach-O, and ELF executables contain a serialized module

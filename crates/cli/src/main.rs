@@ -40,6 +40,11 @@ use vue::{
     vue_sfc_js_artifact_status,
 };
 
+// AST processing allocates and frees many small nodes across Rayon workers.
+// Keep this allocator choice in the executable; library users own theirs.
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliRewriteLevel {
     Minimal,

@@ -6,6 +6,13 @@ ordering.
 
 ## Running Tests
 
+Building the native CLI requires a C compiler in addition to the pinned Rust
+toolchain because its mimalloc allocator is compiled from source. MSVC targets
+use a C++17 compiler. A normal platform development toolchain (Xcode Command
+Line Tools on macOS, build-essential on Linux, or Visual Studio C++ Build Tools
+on Windows) provides this. The allocator dependency belongs only to the CLI;
+Rust library and WASM builds do not need it.
+
 ```bash
 # Run the full suite — prefer nextest (one global parallel pool; ~25x faster
 # than `cargo test`, which runs the 90+ test binaries sequentially)
