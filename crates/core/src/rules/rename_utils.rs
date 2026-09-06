@@ -94,6 +94,55 @@ pub(crate) fn collect_unresolved_reference_names(
 /// safe and keeps readability. Default exports are likewise excluded —
 /// renaming the local of `export default function f() {}` does not change
 /// the public name `default`.
+/// Like [`collect_unresolved_reference_names`], but only names that are real
+/// free references. The resolver visits export specifiers with
+/// `IdentType::Ref`, so the *exported* half of `export { o as compute }` and
+/// the name in `export * as ns` carry the unresolved mark without referencing
+/// anything; a caller deciding whether a name is safe to introduce as a binding
+/// must not treat those as occupied.
+pub(crate) fn collect_free_reference_names(
+    module: &Module,
+    unresolved_mark: Mark,
+) -> HashSet<Atom> {
+    struct Collector {
+        unresolved_mark: Mark,
+        names: HashSet<Atom>,
+    }
+
+    impl Visit for Collector {
+        fn visit_ident(&mut self, ident: &Ident) {
+            if ident.ctxt.outer() == self.unresolved_mark {
+                self.names.insert(ident.sym.clone());
+            }
+        }
+
+        fn visit_export_named_specifier(&mut self, spec: &ExportNamedSpecifier) {
+            if let ModuleExportName::Ident(orig) = &spec.orig {
+                self.visit_ident(orig);
+            }
+        }
+
+        fn visit_export_namespace_specifier(
+            &mut self,
+            _: &swc_core::ecma::ast::ExportNamespaceSpecifier,
+        ) {
+        }
+
+        fn visit_export_default_specifier(
+            &mut self,
+            _: &swc_core::ecma::ast::ExportDefaultSpecifier,
+        ) {
+        }
+    }
+
+    let mut collector = Collector {
+        unresolved_mark,
+        names: HashSet::new(),
+    };
+    module.visit_with(&mut collector);
+    collector.names
+}
+
 pub(crate) fn collect_exported_binding_ids(module: &Module) -> HashSet<BindingId> {
     collect_exported_binding_ids_from_items(&module.body)
 }

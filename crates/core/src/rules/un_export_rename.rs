@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
-use swc_core::common::DUMMY_SP;
+use swc_core::common::{Mark, DUMMY_SP};
 use swc_core::ecma::ast::{
     Decl, ExportDecl, ExportNamedSpecifier, ExportSpecifier, Expr, Module, ModuleDecl,
     ModuleExportName, ModuleItem, NamedExport, Pat, Prop, PropName, PropOrSpread, Stmt, VarDecl,
@@ -12,12 +12,20 @@ use swc_core::ecma::visit::VisitMut;
 use crate::js_names::is_reserved_binding_name;
 
 use super::rename_utils::{
-    collect_jsx_tag_bindings, collect_module_names, collect_top_level_binding_infos,
-    rename_bindings_in_module, starts_with_lowercase, BindingId, BindingRename, RenameShadowIndex,
-    TopLevelBindingInfo, TopLevelBindingKind,
+    collect_free_reference_names, collect_jsx_tag_bindings, collect_module_names,
+    collect_top_level_binding_infos, rename_bindings_in_module, starts_with_lowercase, BindingId,
+    BindingRename, RenameShadowIndex, TopLevelBindingInfo, TopLevelBindingKind,
 };
 
-pub struct UnExportRename;
+pub struct UnExportRename {
+    unresolved_mark: Mark,
+}
+
+impl UnExportRename {
+    pub fn new(unresolved_mark: Mark) -> Self {
+        Self { unresolved_mark }
+    }
+}
 
 #[derive(Clone)]
 struct ExportRenamePlan {
@@ -35,7 +43,12 @@ struct ExportRenamePlan {
 
 impl VisitMut for UnExportRename {
     fn visit_mut_module(&mut self, module: &mut Module) {
-        let module_names = collect_module_names(module);
+        // Names a rename target must not take: every name the module declares,
+        // plus every free (unresolved) name it references. A local renamed to
+        // `Error` or `fetch` would become a module binding that captures the
+        // module's own `new Error(...)` / `fetch(...)` after printing.
+        let mut module_names = collect_module_names(module);
+        module_names.extend(collect_free_reference_names(module, self.unresolved_mark));
         let binding_infos = collect_top_level_binding_infos(module);
         let shadow_bindings = collect_export_shadow_bindings(module, &binding_infos);
         if shadow_bindings.is_empty() {
@@ -201,7 +214,11 @@ fn collect_export_rename_plans(
                             let new_name = id.id.sym.clone();
                             if new_name != info.id.0
                                 && !is_reserved_binding_name(&new_name)
-                                && !name_is_import_binding(&new_name, module_names, binding_infos)
+                                && !name_is_occupied_non_binding(
+                                    &new_name,
+                                    module_names,
+                                    binding_infos,
+                                )
                                 && !rename_breaks_jsx_tag(
                                     &new_name,
                                     &info.id,
@@ -265,7 +282,7 @@ fn collect_export_rename_plans(
                     if old_name == new_name
                         || new_name.len() < old_name.len()
                         || is_reserved_binding_name(&new_name)
-                        || name_is_import_binding(&new_name, module_names, binding_infos)
+                        || name_is_occupied_non_binding(&new_name, module_names, binding_infos)
                         || rename_breaks_jsx_tag(
                             &new_name,
                             &info.id,
@@ -320,7 +337,7 @@ fn collect_export_rename_plans(
                     if getter_name == info.id.0
                         || getter_name.len() < info.id.0.len()
                         || is_reserved_binding_name(&getter_name)
-                        || name_is_import_binding(&getter_name, module_names, binding_infos)
+                        || name_is_occupied_non_binding(&getter_name, module_names, binding_infos)
                         || rename_breaks_jsx_tag(
                             &getter_name,
                             &info.id,
@@ -414,7 +431,7 @@ fn compute_freed_names(
                     if is_reserved_binding_name(&exported.sym) {
                         continue;
                     }
-                    if name_is_import_binding(&exported.sym, module_names, binding_infos) {
+                    if name_is_occupied_non_binding(&exported.sym, module_names, binding_infos) {
                         continue;
                     }
                     if rename_breaks_jsx_tag(
@@ -562,7 +579,7 @@ fn collect_competing_claims(
                         let new_name = id.id.sym.clone();
                         if new_name != info.id.0
                             && !is_reserved_binding_name(&new_name)
-                            && !name_is_import_binding(&new_name, module_names, binding_infos)
+                            && !name_is_occupied_non_binding(&new_name, module_names, binding_infos)
                             && !shadow_index.rename_causes_shadowing(&info.id, &new_name)
                         {
                             claimed_sources.insert(info.id.clone());
@@ -583,7 +600,7 @@ fn collect_competing_claims(
                 if getter_name != info.id.0
                     && getter_name.len() >= info.id.0.len()
                     && !is_reserved_binding_name(&getter_name)
-                    && !name_is_import_binding(&getter_name, module_names, binding_infos)
+                    && !name_is_occupied_non_binding(&getter_name, module_names, binding_infos)
                     && !shadow_index.rename_causes_shadowing(&info.id, &getter_name)
                 {
                     claimed_sources.insert(info.id.clone());
@@ -595,7 +612,11 @@ fn collect_competing_claims(
     (claimed_sources, claimed_targets)
 }
 
-fn name_is_import_binding(
+/// True when `new_name` is occupied by something that is not a renamable
+/// top-level binding: an import local, or a free global reference such as
+/// `Error` / `fetch` / `Symbol` that the module relies on resolving globally.
+/// `module_names` carries both (see `visit_mut_module`).
+fn name_is_occupied_non_binding(
     new_name: &Atom,
     module_names: &HashSet<Atom>,
     binding_infos: &HashMap<Atom, TopLevelBindingInfo>,
@@ -1040,7 +1061,7 @@ export { a as Alpha, b as Bravo, c as Charlie };
             module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
 
             reset_rename_shadow_index_build_count();
-            module.visit_mut_with(&mut UnExportRename);
+            module.visit_mut_with(&mut UnExportRename::new(unresolved_mark));
 
             assert_eq!(rename_shadow_index_build_count(), 1);
         });

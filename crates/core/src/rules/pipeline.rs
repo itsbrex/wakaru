@@ -451,7 +451,9 @@ runner!(run_import_dedup, ImportDedup);
 runner!(run_un_import_rename, |ctx| UnImportRename::new(
     ctx.unresolved_mark
 ));
-runner!(run_un_export_rename, UnExportRename);
+runner!(run_un_export_rename, |ctx| UnExportRename::new(
+    ctx.unresolved_mark
+));
 fn run_un_destructuring(module: &mut Module, ctx: RuleRunContext<'_>) {
     let local_helpers = ctx.local_helpers(module);
     let mut rule = UnDestructuring::new_with_helpers(

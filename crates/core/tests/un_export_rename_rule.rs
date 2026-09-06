@@ -4,7 +4,7 @@ use common::{assert_eq_normalized, render_rule};
 use wakaru_core::rules::UnExportRename;
 
 fn apply(input: &str) -> String {
-    render_rule(input, |_| UnExportRename)
+    render_rule(input, UnExportRename::new)
 }
 
 #[test]
@@ -756,6 +756,119 @@ export const view = render(Kb);
     let expected = r#"
 export const mb = makePanel();
 export const view = render(mb);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn specifier_alias_never_shadows_a_global_the_module_references() {
+    // Renaming `A` to `Error` would turn `new Error(...)` into a call of the
+    // module's own export after printing; the plan must be rejected.
+    let input = r#"
+const A = f("MyError");
+function g(t) {
+    if (t == null) {
+        throw new Error("bad value");
+    }
+    return A;
+}
+export { A as Error, g };
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn specifier_alias_renames_when_the_module_has_no_free_reference_to_the_name() {
+    // Positive control for the test above: without a free `Error` reference
+    // the rename is still applied.
+    let input = r#"
+const A = f("MyError");
+function g() {
+    return A;
+}
+export { A as Error, g };
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("Error = f("),
+        "expected rename to Error, got:\n{output}"
+    );
+    assert!(
+        !output.contains("const A"),
+        "expected A to be renamed, got:\n{output}"
+    );
+}
+
+#[test]
+fn getter_namespace_hint_never_shadows_a_global_the_module_references() {
+    // Pattern C with two getters: `p` → `post` is a normal rename, but
+    // `k` → `fetch` would capture the module's own `fetch(...)` call and must
+    // be rejected while the other getter still renames.
+    let input = r#"
+const k = w.fetch;
+const p = w.post;
+export const http = {
+    get fetch () {
+        return k;
+    },
+    get post () {
+        return p;
+    }
+};
+export function go() {
+    return fetch("/status");
+}
+"#;
+    let expected = r#"
+const k = w.fetch;
+const post = w.post;
+export const http = {
+    get fetch () {
+        return k;
+    },
+    get post () {
+        return post;
+    }
+};
+export function go() {
+    return fetch("/status");
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn getter_namespace_hint_renames_when_the_module_has_no_free_reference_to_the_name() {
+    // Positive control: without a free `fetch` reference both getters rename.
+    let input = r#"
+const k = w.fetch;
+const p = w.post;
+export const http = {
+    get fetch () {
+        return k;
+    },
+    get post () {
+        return p;
+    }
+};
+export function go() {
+    return k("/status");
+}
+"#;
+    let expected = r#"
+const fetch = w.fetch;
+const post = w.post;
+export const http = {
+    get fetch () {
+        return fetch;
+    },
+    get post () {
+        return post;
+    }
+};
+export function go() {
+    return fetch("/status");
+}
 "#;
     assert_eq_normalized(&apply(input), expected);
 }

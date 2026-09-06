@@ -854,7 +854,7 @@ fn recover_late_esm_from_factory_iifes(
         module.visit_mut_with(&mut SmartRename::new(unresolved_mark));
     }
     if options.export_rename {
-        module.visit_mut_with(&mut UnExportRename);
+        module.visit_mut_with(&mut UnExportRename::new(unresolved_mark));
     }
     module.visit_mut_with(&mut ArrowReturn);
 }
