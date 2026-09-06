@@ -93,7 +93,9 @@ The driver owns parsing/resolution, rule execution, the cross-module barrier,
 and emission. `UnpackJob` adds incremental intake: each push detects once,
 retains a compatible AST for processing, and releases skipped inputs. Prepared
 ASTs avoid an emit/parse round trip; raw and source-map modes may materialize
-text when their contracts require it.
+text when their contracts require it. A prepared AST carries the detector's own
+`SyntaxContext` conventions for the bindings it synthesized, so the driver
+clears and re-resolves it at the Phase 1 boundary before any rule runs.
 
 Single-file decompile:
 

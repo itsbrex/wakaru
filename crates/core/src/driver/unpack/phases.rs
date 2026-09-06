@@ -385,7 +385,14 @@ pub(super) fn unpack_multi_module_with_plan(
         };
         let (facts, prepared_parts, warning, suggested_filename) = GLOBALS.set(&globals, || {
             let (mut module, unresolved_mark) = match prepared_input {
-                Some(prepared) => prepared,
+                Some((mut module, _detector_mark)) => {
+                    // The detector's contexts describe its own surgery; give
+                    // the rules resolver-derived ones.
+                    let span = tracing::info_span!("phase1: reresolve prepared");
+                    let _enter = span.enter();
+                    let unresolved_mark = crate::unpacker::resolve_prepared_module(&mut module);
+                    (module, unresolved_mark)
+                }
                 None => {
                     let cm: Lrc<SourceMap> = Default::default();
                     let mut module = {

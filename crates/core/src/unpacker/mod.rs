@@ -15,7 +15,8 @@ use std::panic::{self, AssertUnwindSafe};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{
-    sync::Lrc, BytePos, FileName, Globals, LineCol, Mark, SourceMap, Span, Spanned, GLOBALS,
+    sync::Lrc, BytePos, FileName, Globals, LineCol, Mark, SourceMap, Span, Spanned, SyntaxContext,
+    GLOBALS,
 };
 use swc_core::ecma::ast::{
     Decl, Expr, Module, ModuleDecl, ModuleItem, Stmt, UnaryExpr, UnaryOp, VarDecl, WithStmt,
@@ -23,7 +24,7 @@ use swc_core::ecma::ast::{
 use swc_core::ecma::codegen::{text_writer::JsWriter, Config, Emitter};
 use swc_core::ecma::parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax};
 use swc_core::ecma::transforms::base::resolver;
-use swc_core::ecma::visit::{Visit, VisitMutWith, VisitWith};
+use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
 use crate::analysis::binding_uses::BindingUseIndex;
 use crate::rules::rename_utils::{
@@ -739,6 +740,31 @@ impl From<UnpackResult> for DetectedBundle {
     }
 }
 
+/// Re-derives every `SyntaxContext` in a detector-prepared module.
+///
+/// Detectors resolve a synthetic module once and then keep rewriting it:
+/// stripping the factory wrapper, lifting runtime parameters into locals,
+/// synthesizing bindings. Those later identifiers follow detector-local
+/// conventions rather than resolver output. Clearing and resolving again at
+/// the handoff gives the rule pipeline the same contexts a parsed module
+/// would have, so the detector's conventions never reach a rule. Must run
+/// inside the module's `Globals`.
+pub(crate) fn resolve_prepared_module(module: &mut Module) -> Mark {
+    struct ClearContexts;
+
+    impl VisitMut for ClearContexts {
+        fn visit_mut_syntax_context(&mut self, ctxt: &mut SyntaxContext) {
+            *ctxt = SyntaxContext::empty();
+        }
+    }
+
+    module.visit_mut_with(&mut ClearContexts);
+    let unresolved_mark = Mark::new();
+    let top_level_mark = Mark::new();
+    module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+    unresolved_mark
+}
+
 impl PreparedModuleAst {
     pub(crate) fn materialize(
         self,
@@ -1213,6 +1239,69 @@ pub fn unpack_webpack4_raw(source: &str) -> Option<UnpackResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_prepared_module_rederives_every_context() {
+        use swc_core::ecma::ast::Ident;
+
+        GLOBALS.set(&Globals::new(), || {
+            let cm: Lrc<SourceMap> = Default::default();
+            let mut module = parse_es_module(
+                "var a = 1; function f() { let b = a; return b + c; }",
+                "fixture.js",
+                cm,
+            )
+            .expect("fixture should parse");
+
+            // Simulate detector surgery: one binding carries a stray mark, the
+            // rest of the module was never resolved.
+            struct Stamp(SyntaxContext);
+            impl VisitMut for Stamp {
+                fn visit_mut_ident(&mut self, ident: &mut Ident) {
+                    if ident.sym == "a" {
+                        ident.ctxt = self.0;
+                    }
+                }
+            }
+            let stray = SyntaxContext::empty().apply_mark(Mark::new());
+            module.visit_mut_with(&mut Stamp(stray));
+
+            let unresolved_mark = resolve_prepared_module(&mut module);
+
+            #[derive(Default)]
+            struct Idents(Vec<Ident>);
+            impl Visit for Idents {
+                fn visit_ident(&mut self, ident: &Ident) {
+                    self.0.push(ident.clone());
+                }
+            }
+            let mut idents = Idents::default();
+            module.visit_with(&mut idents);
+            let ctxts = |name: &str| -> Vec<SyntaxContext> {
+                idents
+                    .0
+                    .iter()
+                    .filter(|ident| ident.sym == name)
+                    .map(|ident| ident.ctxt)
+                    .collect()
+            };
+
+            let a = ctxts("a");
+            assert_eq!(a.len(), 2, "declaration and reference");
+            assert_eq!(a[0], a[1], "binding and reference share one context");
+            assert_ne!(a[0], SyntaxContext::empty());
+            assert_ne!(a[0], stray, "the stray context was replaced");
+            let b = ctxts("b");
+            assert_eq!(b[0], b[1]);
+            assert_ne!(b[0], a[0], "inner scope gets its own context");
+            let c = ctxts("c");
+            assert_eq!(
+                c[0].outer(),
+                unresolved_mark,
+                "free reference is unresolved"
+            );
+        });
+    }
 
     #[test]
     fn runtime_local_name_uses_delimited_suffix() {

@@ -170,11 +170,11 @@ position-insensitive runtime normalization. Only immediately evaluated uses
 before the first unconditional write, plus supported loader uses in that
 write's initializer, receive the canonical `module`, `exports`, or `require`
 identity. The write is lifted to a new `var` local and every later use follows
-that local; the local carries a non-unresolved `SyntaxContext`, like the other
-synthetic locals, so rules that classify identifiers by `unresolved_mark` see a
-module-local binding rather than an undeclared global. Runtime-helper members
-and mapped module calls in a
-loader prefix can then use the normal webpack recovery path; post-write calls
+that local. Contexts inside a prepared module follow detector conventions; the
+driver re-derives them with the resolver at the Phase 1 handoff, so rules that
+classify identifiers by `unresolved_mark` see the local as a module-local
+binding rather than an undeclared global. Runtime-helper members and mapped
+module calls in a loader prefix can then use the normal webpack recovery path; post-write calls
 and members stay attached to the new local value even when a numeric argument
 happens to match a module-table ID. Webpack 5's top-level
 `module = require.hmd(module)` / `nmd(module)` decorators are runtime-preserving

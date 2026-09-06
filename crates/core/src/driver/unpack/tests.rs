@@ -70,6 +70,12 @@ fn prepared_plain_input_reuses_detection_ast_in_phase1() {
             "unexpected prepared-input round trip {skipped:?} in {spans:?}"
         );
     }
+    assert!(
+        spans
+            .iter()
+            .any(|name| name == "phase1: reresolve prepared"),
+        "prepared ASTs get resolver-derived contexts at the handoff: {spans:?}"
+    );
     assert!(spans.iter().any(|name| name == "prepare_plain: resolver"));
 }
 
@@ -333,6 +339,12 @@ fn prepared_webpack_input_does_not_reparse_for_chunk_metadata() {
             "unexpected prepared-input round trip {skipped:?} in {spans:?}"
         );
     }
+    assert!(
+        spans
+            .iter()
+            .any(|name| name == "phase1: reresolve prepared"),
+        "prepared ASTs get resolver-derived contexts at the handoff: {spans:?}"
+    );
 }
 
 #[test]
