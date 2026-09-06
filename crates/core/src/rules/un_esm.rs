@@ -2163,7 +2163,7 @@ fn prepare_swc_async_namespace_requires(module: &mut Module, unresolved_mark: Ma
     let mut eval = DirectEvalPresence::default();
     module.visit_with(&mut eval);
     if eval.found
-        || super::un_async_await::module_has_with_stmt(module)
+        || super::eval_utils::module_has_with_stmt(module)
         || candidates.iter().any(|(_, local, _)| {
             !uses.has_single_declaration(&local.to_id())
                 || !uses.has_only_static_member_reads(&local.to_id(), "_")

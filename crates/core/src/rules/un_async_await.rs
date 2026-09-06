@@ -17,7 +17,7 @@ use super::cross_module_helper_refs::{
 use super::decl_utils::{
     binding_id, collect_decl_binding_ids, collect_pat_names, collect_var_decl_binding_ids,
 };
-use super::eval_utils::is_direct_eval_call;
+use super::eval_utils::{is_direct_eval_call, module_has_with_stmt};
 use super::helper_matcher::{binding_key, ident_matches_binding};
 use super::rename_utils::{rename_bindings, BindingId, BindingRename};
 use super::state_machine::{
@@ -2058,21 +2058,6 @@ fn is_awaiter_arguments_arg(expr: &Expr, helpers: &AsyncHelperContext) -> bool {
         }
         expr => is_void_literal(expr),
     }
-}
-
-/// Whether the module contains a `with` statement anywhere. Compilers never
-/// emit one, so a module-wide check is a cheap stand-in for a with-scope
-/// model: the identifier-shaped frame slots simply stop being canonical.
-pub(super) fn module_has_with_stmt(module: &Module) -> bool {
-    struct Finder(bool);
-    impl Visit for Finder {
-        fn visit_with_stmt(&mut self, _: &swc_core::ecma::ast::WithStmt) {
-            self.0 = true;
-        }
-    }
-    let mut finder = Finder(false);
-    module.visit_with(&mut finder);
-    finder.0
 }
 
 /// Where the generator body ends up after unwrapping. The two destinations

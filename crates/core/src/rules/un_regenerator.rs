@@ -14,6 +14,7 @@ use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 use crate::facts::{HelperKind, ModuleFactsMap};
 
 use super::decl_utils::collect_pat_names;
+use super::eval_utils::module_has_with_stmt;
 use super::helper_matcher::{
     binding_key, count_binding_refs, member_prop_name, remove_fn_decls_by_binding,
     remove_var_declarators_by_binding,
@@ -23,9 +24,7 @@ use super::state_machine::{
     OpcodeReturnScan, StateMachineProgram,
 };
 use super::transpiler_helper_utils::{BindingKey, LocalHelperContext, TranspilerHelperKind};
-use super::un_async_await::{
-    module_has_with_stmt, try_transform_ts_generator_body, AsyncHelperContext,
-};
+use super::un_async_await::{try_transform_ts_generator_body, AsyncHelperContext};
 
 use crate::js_names::is_likely_generated_alias;
 use crate::utils::paren::strip_parens;

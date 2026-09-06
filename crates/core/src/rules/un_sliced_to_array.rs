@@ -303,7 +303,7 @@ impl IndexedReturnContext {
     fn collect(module: &Module) -> Option<Self> {
         let mut eval = super::eval_utils::DirectEvalPresence::default();
         module.visit_with(&mut eval);
-        if eval.found || super::un_async_await::module_has_with_stmt(module) {
+        if eval.found || super::eval_utils::module_has_with_stmt(module) {
             return None;
         }
         #[derive(Default)]

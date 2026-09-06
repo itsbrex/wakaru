@@ -1,5 +1,5 @@
 use swc_core::atoms::Atom;
-use swc_core::ecma::ast::{Callee, Expr, Lit};
+use swc_core::ecma::ast::{Callee, Expr, Lit, Module, WithStmt};
 use swc_core::ecma::visit::{Visit, VisitWith};
 
 use crate::utils::paren::strip_parens;
@@ -200,4 +200,21 @@ pub(crate) fn js_source_mentions_binding(source: &str, name: &Atom) -> bool {
 
 fn is_js_ident_part(ch: char) -> bool {
     ch == '$' || ch == '_' || ch.is_ascii_alphanumeric()
+}
+
+/// Whether the module contains a `with` statement anywhere. Compilers never
+/// emit one, so a module-wide check is the agreed stand-in for a with-scope
+/// model: a rule that reads a free name as the global, renames a binding, or
+/// introduces one skips the module instead (see the dynamic-scope section of
+/// `docs/rewrite-assumptions.md`).
+pub(crate) fn module_has_with_stmt(module: &Module) -> bool {
+    struct Finder(bool);
+    impl Visit for Finder {
+        fn visit_with_stmt(&mut self, _: &WithStmt) {
+            self.0 = true;
+        }
+    }
+    let mut finder = Finder(false);
+    module.visit_with(&mut finder);
+    finder.0
 }
