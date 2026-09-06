@@ -195,13 +195,14 @@ for the handoff to normal-only runtime restoration.
 #### Key design pattern: `unresolved_mark`
 
 After `resolver()` runs, binding identifiers and references carry a
-`SyntaxContext`. There are three separate responsibilities:
+`SyntaxContext`. There are four separate responsibilities:
 
 | Operation | Required check |
 |---|---|
-| Recognize a known global, such as `Object` or `require` | Match its name and require `unresolved_mark` |
-| Follow a local helper, factory parameter, or alias | Match its resolved binding ID `(sym, ctxt)` |
-| Insert or rename a binding | Check emitted-name collisions and capture at affected use sites, as well as binding identity |
+| Recognize a known global, such as `Object` or `require` | Match its name and require `unresolved_mark`; a synthesized reference to a global carries the unresolved context |
+| Follow a local helper, factory parameter, or alias | Match its resolved binding ID `(sym, ctxt)`; when new code needs a reference to it, clone the binding's `Ident` rather than rebuilding it from a string |
+| Introduce or rename a binding | Give it a fresh context for identity and prove the emitted name is free (below); context alone never prevents capture |
+| Emit a name that is not a binding (a JSX intrinsic tag, the `exported` half of a specifier, a property name) | No context; these are strings after printing |
 
 For global recognition, the visitor takes `unresolved_mark: Mark` and guards
 the name match:
@@ -228,6 +229,13 @@ The caller must choose a safe replacement name: different contexts do not make
 two identical spellings safe after emission. For example, inserting an import
 named `UIBase` can capture an existing global `UIBase` assignment even though
 their pre-emission contexts differ.
+
+Printed JavaScript has no `SyntaxContext`. A rule that introduces a binding must
+prove the emitted name is free: no enclosing scope declares it, and the module
+does not reference it as a global. A rule that synthesizes a reference to a
+global gives it the unresolved context and skips the module when any binding
+spells that name. The module-wide skip forgoes almost no recovery in practice,
+so there is no scope-precise name index.
 
 Inspect existing utilities before writing a collector: `rename_utils.rs`
 contains binding renaming and name/shadowing analysis, `analysis/binding_uses.rs`

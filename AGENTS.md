@@ -152,6 +152,9 @@ it. For a local helper, parameter, or alias, match its resolved binding ID
 Inserting or renaming a binding also needs emitted-name collision checks:
 `SyntaxContext` alone does not prevent capture in printed JavaScript.
 See `docs/architecture.md` for the matching and renaming responsibilities.
+Before adding a `with`, `eval`, or shadowing guard to a rule, read the
+dynamic-scope section of `docs/rewrite-assumptions.md` and reuse the helpers in
+`rules/eval_utils.rs`.
 
 ### Renaming identifiers
 

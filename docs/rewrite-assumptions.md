@@ -625,22 +625,20 @@ outer conversion; nested arrows still do. For `function() {}.bind(this)`, a
 source that mentions only `this` is safe because both forms capture the same
 value, while `arguments` and `new.target` still block conversion.
 
-Three boundaries follow from this. Coverage is rule-specific: the boundaries
-describe what a rule *may* rely on, not checks every rule already performs.
+`with` and direct `eval` are module-wide hazards. A rule that reads a free
+name as the global, renames or removes a binding, or introduces a new binding
+skips the whole module when either construct is present. wakaru does not model
+`with` bodies or eval scopes any finer than that: compilers do not emit them,
+and well under 1% of modules in a huge corpus of production bundles contain
+either. A rule that lacks the check is a bug, not a documented exception.
+
+Two boundaries follow from this.
 
 - `SyntaxContext` covers static lexical scope only. It does not see bindings a
-  `with` object or a sloppy direct `eval` introduces at runtime, so a rule that
-  relies on an identifier resolving to the global (`undefined`, `Infinity`,
-  `Promise`) should treat a candidate inside a `with` body, or in a var scope
-  with an unknown direct `eval`, as unproven and skip it. Today only
-  `UnAsyncAwait` applies the `with` half (module-wide: any `with` statement
-  makes its identifier-shaped frame slots non-canonical); the other rules that
-  read an unresolved `undefined` or builtin name as the global do not check
-  for `with` yet — see the rule-correctness audit for the tracked class and
-  the shared-flag proposal.
-- Unknown direct `eval` is a conservative bail-out for renames, binding
-  removal, declaration-kind changes, and synthesized identifier insertion; a
-  known source string keeps the name-mention best effort above.
+  `with` object or a sloppy direct `eval` introduces at runtime. Unknown direct
+  `eval` blocks renames, binding removal, declaration-kind changes, and
+  synthesized identifier insertion; a known source string keeps the
+  name-mention best effort above.
 - Indirect `eval`, opaque calls, other modules, and host code can mutate
   globals and intrinsics but not the current lexical scope. Those mutations
   fall under the Execution Environment Baseline and are not tracked.
