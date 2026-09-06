@@ -2327,9 +2327,7 @@ fn inline_sliced_expr_matches_ident(expr: &Expr, target: &Ident) -> bool {
     inline_sliced_ident_matches(id, target)
 }
 fn inline_sliced_ident_matches(left: &Ident, right: &Ident) -> bool {
-    left.sym == right.sym
-        && (left.ctxt == right.ctxt
-            || (left.ctxt == SyntaxContext::empty() && right.ctxt != SyntaxContext::empty()))
+    left.sym == right.sym && left.ctxt == right.ctxt
 }
 fn scan_inline_helper_call_markers(call: &CallExpr, markers: &mut BodyMarkerState) {
     let Callee::Expr(callee) = &call.callee else {

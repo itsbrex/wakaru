@@ -24,7 +24,7 @@ use crate::provider_namespace_repair::run_provider_namespace_repair;
 use crate::utils::paren::strip_parens;
 use crate::utils::prototype_members::is_prototype_mutating_member_name;
 
-use super::decl_utils::{collect_decl_names, collect_pat_names, same_ident};
+use super::decl_utils::{collect_decl_names, collect_pat_names, fresh_binding_ident, same_ident};
 use super::eval_utils::{
     direct_eval_call_source, js_source_mentions_binding, DirectEvalAnalyzer, DirectEvalPresence,
     EvalCallSource,
@@ -3710,7 +3710,7 @@ fn build_import_decls(src: &str, entry: &SourceEntry, out: &mut Vec<ModuleItem>)
             specifiers.push(ImportSpecifier::Named(ImportNamedSpecifier {
                 span: DUMMY_SP,
                 local: local.clone(),
-                imported: Some(ModuleExportName::Ident(make_ident(imported.clone()))),
+                imported: Some(ModuleExportName::Ident(make_name_ident(imported.clone()))),
                 is_type_only: false,
             }));
         }
@@ -3814,7 +3814,7 @@ fn build_export_items(
                             specifiers: vec![ExportSpecifier::Named(ExportNamedSpecifier {
                                 span: DUMMY_SP,
                                 orig: ModuleExportName::Ident(id),
-                                exported: Some(ModuleExportName::Ident(make_ident(name))),
+                                exported: Some(ModuleExportName::Ident(make_name_ident(name))),
                                 is_type_only: false,
                             })],
                             src: None,
@@ -3825,7 +3825,7 @@ fn build_export_items(
                 }
             } else if is_reserved_binding_name(&name) || unresolved_reference_names.contains(&name)
             {
-                let local = make_ident(fresh_prefixed_name(&name, used_names));
+                let local = fresh_binding_ident(fresh_prefixed_name(&name, used_names), DUMMY_SP);
                 vec![
                     ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(VarDecl {
                         span,
@@ -3847,7 +3847,7 @@ fn build_export_items(
                         specifiers: vec![ExportSpecifier::Named(ExportNamedSpecifier {
                             span: DUMMY_SP,
                             orig: ModuleExportName::Ident(local),
-                            exported: Some(ModuleExportName::Ident(make_ident(name))),
+                            exported: Some(ModuleExportName::Ident(make_name_ident(name))),
                             is_type_only: false,
                         })],
                         src: None,
@@ -3867,7 +3867,7 @@ fn build_export_items(
                         decls: vec![VarDeclarator {
                             span: DUMMY_SP,
                             name: Pat::Ident(BindingIdent {
-                                id: make_ident(name),
+                                id: fresh_binding_ident(name, DUMMY_SP),
                                 type_ann: None,
                             }),
                             init: Some(expr),
@@ -3989,10 +3989,10 @@ fn hoist_embedded_requires(module: &mut Module, unresolved_mark: Mark) {
                     if let Callee::Expr(callee) = &outer_call.callee {
                         if let Expr::Call(inner_call) = strip_parens(callee) {
                             if is_require_call(inner_call, unresolved_mark).is_some() {
-                                let local = make_ident(fresh_prefixed_name(
-                                    &Atom::from("default"),
-                                    &mut used_names,
-                                ));
+                                let local = fresh_binding_ident(
+                                    fresh_prefixed_name(&Atom::from("default"), &mut used_names),
+                                    DUMMY_SP,
+                                );
                                 new_body.push(make_require_var_item(
                                     local.clone(),
                                     Box::new(Expr::Call(inner_call.clone())),
@@ -4422,7 +4422,7 @@ fn prove_toplevel_require_named_member_args(
         {
             return None;
         } else {
-            let local = make_ident(candidate.name.clone());
+            let local = fresh_binding_ident(candidate.name.clone(), DUMMY_SP);
             claimed_source_by_local.insert(candidate.name.clone(), candidate.source.clone());
             claimed_local.insert(candidate.name.clone(), local.clone());
             let init = candidate_named_member_init(&module.body, candidate)?;
@@ -4816,7 +4816,7 @@ fn prove_toplevel_require_default_member_args(
                 }
                 synthetic
             };
-            let local = make_ident(local_name);
+            let local = fresh_binding_ident(local_name, DUMMY_SP);
             claimed_local_by_source.insert(candidate.source.clone(), local.clone());
             let init = candidate_default_member_init(&module.body, candidate)?;
             plan.inserts.entry(candidate.item_index).or_default().push(
@@ -5062,7 +5062,10 @@ fn hoist_requires_from_seq(
     }
 
     let final_expr = if remaining.is_empty() {
-        Box::new(Expr::Ident(make_ident(Atom::from("undefined"))))
+        Box::new(Expr::Ident(make_unresolved_ident(
+            Atom::from("undefined"),
+            unresolved_mark,
+        )))
     } else if remaining.len() == 1 {
         remaining.into_iter().next().unwrap()
     } else {
@@ -5189,7 +5192,7 @@ fn import_local_for_assignment(
         return (target, None);
     }
 
-    let temp = make_ident(fresh_prefixed_name(&target.sym, used_names));
+    let temp = fresh_binding_ident(fresh_prefixed_name(&target.sym, used_names), DUMMY_SP);
     let assign = ModuleItem::Stmt(Stmt::Expr(ExprStmt {
         span: DUMMY_SP,
         expr: Box::new(Expr::Assign(AssignExpr {
@@ -5444,7 +5447,10 @@ fn split_called_module_exports_assignments(module: &mut Module, unresolved_mark:
         }
 
         let value = assign.right.clone();
-        let local = make_ident(fresh_prefixed_name(&Atom::from("default"), &mut used_names));
+        let local = fresh_binding_ident(
+            fresh_prefixed_name(&Atom::from("default"), &mut used_names),
+            DUMMY_SP,
+        );
         let capture = ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(VarDecl {
             span: expr_stmt.span,
             ctxt: Default::default(),
@@ -5602,7 +5608,10 @@ fn split_chained_local_module_exports_assignments(module: &mut Module, unresolve
             continue;
         };
 
-        let local = make_ident(fresh_prefixed_name(&Atom::from("default"), &mut used_names));
+        let local = fresh_binding_ident(
+            fresh_prefixed_name(&Atom::from("default"), &mut used_names),
+            DUMMY_SP,
+        );
         new_body.push(ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(VarDecl {
             span: expr_stmt.span,
             ctxt: Default::default(),
@@ -5906,7 +5915,8 @@ fn preserve_written_cjs_require_bindings(module: &mut Module, unresolved_mark: M
             continue;
         };
 
-        let import_local = make_ident(fresh_prefixed_name(base_name, &mut used_names));
+        let import_local =
+            fresh_binding_ident(fresh_prefixed_name(base_name, &mut used_names), DUMMY_SP);
         declarator.init = Some(Box::new(Expr::Ident(import_local.clone())));
 
         let capture = VarDecl {
@@ -6427,8 +6437,7 @@ fn is_unresolved_ident(id: &Ident, name: &str, unresolved_mark: Mark) -> bool {
 }
 
 fn is_undefined_ident(id: &Ident, unresolved_mark: Mark) -> bool {
-    id.sym.as_ref() == "undefined"
-        && (id.ctxt.outer() == unresolved_mark || id.ctxt == SyntaxContext::empty())
+    is_unresolved_ident(id, "undefined", unresolved_mark)
 }
 
 /// Check if a string is a valid JS identifier
@@ -6452,7 +6461,9 @@ fn make_str(value: &str) -> Str {
     }
 }
 
-fn make_ident(sym: Atom) -> Ident {
+/// An identifier that names something but binds nothing: the `imported` or
+/// `exported` half of a specifier. Not a reference, so it carries no context.
+fn make_name_ident(sym: Atom) -> Ident {
     Ident::new_no_ctxt(sym, DUMMY_SP)
 }
 

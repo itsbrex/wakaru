@@ -3244,7 +3244,7 @@ fn extract_default_assignment(
             if !matches!(alt.as_ref(), Expr::Ident(id) if id.sym == tmp_name) {
                 return None;
             }
-            let default_value = if matches!(cons.as_ref(), Expr::Ident(id) if id.sym.as_ref() == "undefined" && (id.ctxt.outer() == unresolved_mark || id.ctxt == SyntaxContext::empty()))
+            let default_value = if matches!(cons.as_ref(), Expr::Ident(id) if id.sym.as_ref() == "undefined" && id.ctxt.outer() == unresolved_mark)
             {
                 None
             } else {
@@ -3305,9 +3305,7 @@ fn match_undefined_check(
     if undef_id.sym.as_ref() != "undefined" {
         return None;
     }
-    let is_global =
-        undef_id.ctxt.outer() == unresolved_mark || undef_id.ctxt == SyntaxContext::empty();
-    if !is_global {
+    if undef_id.ctxt.outer() != unresolved_mark {
         return None;
     }
     Some((tmp.sym.clone(), tmp.ctxt))

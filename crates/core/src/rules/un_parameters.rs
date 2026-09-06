@@ -1,5 +1,5 @@
 use swc_core::atoms::Atom;
-use swc_core::common::{Mark, Spanned, SyntaxContext, DUMMY_SP};
+use swc_core::common::{Mark, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayPat, ArrowExpr, ArrowFunctionBody, AssignExpr, AssignOp, AssignPat, AssignPatProp,
     AssignTarget, BinExpr, BinaryOp, BindingIdent, Bool, CatchClause, ClassDecl, ComputedPropName,
@@ -832,8 +832,7 @@ fn is_void0_or_undefined(expr: &Expr, unresolved_mark: Mark) -> bool {
 }
 
 fn is_undefined_ident(id: &Ident, unresolved_mark: Mark) -> bool {
-    id.sym.as_ref() == "undefined"
-        && (id.ctxt.outer() == unresolved_mark || id.ctxt == SyntaxContext::empty())
+    id.sym.as_ref() == "undefined" && id.ctxt.outer() == unresolved_mark
 }
 
 fn is_arguments_ident(id: &Ident, unresolved_mark: Mark) -> bool {
@@ -2135,7 +2134,6 @@ fn extract_property_alias_default(
 
 fn same_param_alias_reference(reference: &Ident, alias: &Ident) -> bool {
     same_ident(reference, alias)
-        || (alias.ctxt == SyntaxContext::empty() && reference.sym == alias.sym)
 }
 
 fn extract_default_from_temp_stmt(

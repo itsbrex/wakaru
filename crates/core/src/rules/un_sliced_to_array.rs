@@ -1951,9 +1951,7 @@ fn same_sliced_ref_ident(
     obj: &swc_core::ecma::ast::Ident,
     ref_ident: &swc_core::ecma::ast::Ident,
 ) -> bool {
-    obj.sym == ref_ident.sym
-        && (obj.ctxt == ref_ident.ctxt
-            || (obj.ctxt == SyntaxContext::empty() && ref_ident.ctxt != SyntaxContext::empty()))
+    obj.sym == ref_ident.sym && obj.ctxt == ref_ident.ctxt
 }
 
 fn ident_used_in_items(items: &[ModuleItem], target: &swc_core::ecma::ast::Ident) -> bool {

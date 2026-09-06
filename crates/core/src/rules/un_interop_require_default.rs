@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
-use swc_core::common::{SyntaxContext, DUMMY_SP};
+use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
     ArrowExpr, AssignExpr, AssignOp, AssignTarget, CallExpr, Callee, Class, Decl, Expr, ForHead,
     ForInStmt, ForOfStmt, Function, Ident, ImportDecl, ImportSpecifier, ImportStarAsSpecifier, Lit,
@@ -11,6 +11,7 @@ use swc_core::ecma::ast::{
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
+use super::decl_utils::fresh_binding_ident;
 use super::transpiler_helper_utils::{
     classify_inline_helper_call, detect_helper_from_path, helpers_with_remaining_refs,
     remove_helper_declarations, BindingKey, LocalHelperContext, TranspilerHelperKind,
@@ -191,10 +192,9 @@ fn preserve_remaining_swc_member_helper_namespaces(
         // calls still reach SWC's helper. Keep those calls intact, but recover
         // the exact helper module as a namespace import behind a mutable alias
         // so neither helper identity nor assignment semantics are invented.
-        let import_local = Ident::new(
+        let import_local = fresh_binding_ident(
             fresh_namespace_import_name(&binding.sym, &mut used_names),
             DUMMY_SP,
-            SyntaxContext::empty(),
         );
         new_body.push(make_swc_namespace_import(import_local.clone(), source));
         var.decls[0].init = Some(Box::new(Expr::Ident(import_local)));
