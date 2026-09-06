@@ -1932,3 +1932,60 @@ function copy(obj, rest) {
     assert!(output.contains("...rest_2"), "{output}");
     assert!(output.contains("use(rest, rest_1)"), "{output}");
 }
+
+#[test]
+fn untouched_nested_functions_keep_their_ast_allocations() {
+    use swc_core::common::Mark;
+    use swc_core::ecma::ast::{FnDecl, Function, Module};
+    use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+
+    #[derive(Default)]
+    struct Functions(Vec<*const Function>);
+    impl Visit for Functions {
+        fn visit_fn_decl(&mut self, decl: &FnDecl) {
+            self.0.push(decl.function.as_ref() as *const Function);
+            decl.visit_children_with(self);
+        }
+    }
+
+    struct CheckAllocations(Mark);
+    impl VisitMut for CheckAllocations {
+        fn visit_mut_module(&mut self, module: &mut Module) {
+            let mut before = Functions::default();
+            module.visit_with(&mut before);
+            module.visit_mut_with(&mut UnObjectRest::new(self.0));
+            let mut after = Functions::default();
+            module.visit_with(&mut after);
+            // Rebuilding each enclosing statement list must not deep-clone
+            // untouched function trees. That repeats work at every nesting level.
+            assert_eq!(before.0.len(), 3);
+            assert_eq!(before.0, after.0);
+        }
+    }
+
+    let input = r#"
+import { __rest } from "tslib";
+function outer(obj) {
+    function middle() {
+        function inner() { return obj.value; }
+        return inner();
+    }
+    var x = obj.x;
+    var rest = __rest(obj, ["x"]);
+    return [middle(), x, rest];
+}
+use(outer);
+"#;
+    let expected = r#"
+function outer(obj) {
+    function middle() {
+        function inner() { return obj.value; }
+        return inner();
+    }
+    var { x, ...rest } = obj;
+    return [middle(), x, rest];
+}
+use(outer);
+"#;
+    assert_eq_normalized(&render_rule(input, CheckAllocations), expected);
+}

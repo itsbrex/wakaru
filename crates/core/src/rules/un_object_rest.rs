@@ -259,8 +259,8 @@ fn run_un_object_rest(
     let mut recent_stmts: Vec<Stmt> = Vec::new();
     let mut exclusion_arrays = exclusion_arrays;
 
-    let items = std::mem::take(&mut module.body);
-    for (index, item) in items.iter().cloned().enumerate() {
+    let mut items = std::mem::take(&mut module.body).into_iter();
+    while let Some(item) = items.next() {
         let ModuleItem::Stmt(ref stmt) = item else {
             recent_stmts.clear();
             new_body.push(item);
@@ -281,7 +281,7 @@ fn run_un_object_rest(
         if let Some((rest_binding, declaration_kind, source, excluded_keys, before, after)) =
             extraction
         {
-            let future_jsx_tag_bindings = jsx_tag_bindings_in_module_items(&items[index + 1..]);
+            let future_jsx_tag_bindings = jsx_tag_bindings_in_module_items(items.as_slice());
             if has_jsx_tag_default_pair(
                 &recent_stmts,
                 &source,
@@ -1716,16 +1716,20 @@ impl VisitMut for ObjectRestProcessor<'_> {
         let mut new_stmts = Vec::with_capacity(stmts.len());
         let mut exclusion_arrays = self.exclusion_arrays.clone();
 
-        for (index, stmt) in stmts.iter().enumerate() {
+        // Move untouched subtrees instead of cloning them again at every
+        // enclosing statement list. The iterator retains the original suffix
+        // for the JSX look-ahead proof.
+        let mut remaining = std::mem::take(stmts).into_iter();
+        while let Some(stmt) = remaining.next() {
             if let Some(return_stmt) =
-                self.rewrite_returned_rest(stmt, &mut new_stmts, &exclusion_arrays)
+                self.rewrite_returned_rest(&stmt, &mut new_stmts, &exclusion_arrays)
             {
                 new_stmts.push(return_stmt);
                 continue;
             }
-            let extraction = try_extract_owp_iife(stmt, &exclusion_arrays).or_else(|| {
+            let extraction = try_extract_owp_iife(&stmt, &exclusion_arrays).or_else(|| {
                 try_extract_owp_named_call(
-                    stmt,
+                    &stmt,
                     self.named_helpers,
                     self.local_helpers,
                     self.swc_numeric_helper_namespaces,
@@ -1737,7 +1741,7 @@ impl VisitMut for ObjectRestProcessor<'_> {
             if let Some((rest_binding, declaration_kind, source, excluded_keys, before, after)) =
                 extraction
             {
-                let future_jsx_tag_bindings = jsx_tag_bindings_in_stmts(&stmts[index + 1..]);
+                let future_jsx_tag_bindings = jsx_tag_bindings_in_stmts(remaining.as_slice());
                 if has_jsx_tag_default_pair(
                     &new_stmts,
                     &source,
@@ -1745,8 +1749,8 @@ impl VisitMut for ObjectRestProcessor<'_> {
                     &future_jsx_tag_bindings,
                     self.unresolved_mark,
                 ) {
-                    collect_exclusion_arrays_from_stmt(stmt, &mut exclusion_arrays);
-                    new_stmts.push(stmt.clone());
+                    collect_exclusion_arrays_from_stmt(&stmt, &mut exclusion_arrays);
+                    new_stmts.push(stmt);
                     continue;
                 }
                 let mut inline_accesses = declarators_to_accesses(&before, &source, &excluded_keys);
@@ -1791,7 +1795,7 @@ impl VisitMut for ObjectRestProcessor<'_> {
             }
 
             if let Some((rest_binding, source, excluded_keys)) = try_extract_owp_named_assignment(
-                stmt,
+                &stmt,
                 self.named_helpers,
                 self.local_helpers,
                 self.swc_numeric_helper_namespaces,
@@ -1827,8 +1831,8 @@ impl VisitMut for ObjectRestProcessor<'_> {
                 }
             }
 
-            collect_exclusion_arrays_from_stmt(stmt, &mut exclusion_arrays);
-            new_stmts.push(stmt.clone());
+            collect_exclusion_arrays_from_stmt(&stmt, &mut exclusion_arrays);
+            new_stmts.push(stmt);
         }
 
         *stmts = new_stmts;
