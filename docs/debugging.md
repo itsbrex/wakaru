@@ -113,7 +113,9 @@ cargo run --profile dev-release -p wakaru-core --example name_capture_oracle -- 
                                          # aggregate totals on stderr
 ```
 
-The expected result on any corpus is zero for all three. Run it after a change
+`ORACLE_ATTRIBUTE=1` re-runs the pipeline rule by rule for each module with a
+residual and names the first rule after which it appears. The expected result
+on any corpus is zero for all three. Run it after a change
 to identifier synthesis, renaming, or the unpacker handoff; the fixture suite
 compares text and stays green when only contexts are wrong. A dangling
 reference also flags a rule that removed a declaration while an export
@@ -164,6 +166,10 @@ helper functions from `crates/core/tests/common/mod.rs` (documented in
 - **`render_pipeline_between(source, "Start", "Stop")`** -- runs only the rules
   from `Start` through `Stop` (inclusive). Use this to isolate a narrow range
   when you suspect one of several adjacent rules.
+
+Both names denote pipeline positions. A rule that is disabled at the requested
+level or DCE mode still marks where the run starts or stops; it just does not
+run itself, so stopping at a disabled rule never runs the rest of the pipeline.
 
 Example workflow for a regression:
 

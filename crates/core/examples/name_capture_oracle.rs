@@ -21,6 +21,12 @@
 //!
 //! Usage: name_capture_oracle <file-or-dir>... > out.jsonl
 //! One JSON object per module on stdout; aggregate on stderr.
+//!
+//! `ORACLE_ATTRIBUTE=1` re-runs the pipeline rule by rule for every module
+//! with an unmarked or dangling residual and reports the first rule after
+//! which each residual appears (`attribution`: `[kind, name, line, rule]`).
+//! Unmarked names are attributed once per corpus; dangling references are
+//! attributed per module by name and line.
 
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -600,16 +606,21 @@ fn parse(cm: &Lrc<SourceMap>, path: &str, source: &str) -> Result<Program, Strin
     }
 }
 
+/// Residuals present after the pipeline has run up to and including a rule:
+/// unmarked reference names, and dangling references by name and line.
+struct Residuals {
+    unmarked: HashSet<Atom>,
+    dangling: HashSet<(Atom, usize)>,
+}
+
 /// Re-runs parse → resolver → pipeline (stopping after `stop_after`) and
-/// returns the empty-ctxt reference names present at that point.
-fn unmarked_names_until(
-    cm: &Lrc<SourceMap>,
-    name: &str,
-    source: &str,
-    stop_after: &str,
-) -> HashSet<Atom> {
+/// returns the residuals present at that point.
+fn residuals_until(cm: &Lrc<SourceMap>, name: &str, source: &str, stop_after: &str) -> Residuals {
     let Ok(program) = parse(cm, name, source) else {
-        return HashSet::new();
+        return Residuals {
+            unmarked: HashSet::new(),
+            dangling: HashSet::new(),
+        };
     };
     let mut module = match program {
         Program::Module(m) => m,
@@ -631,7 +642,10 @@ fn unmarked_names_until(
             .with_current_filename(name),
     );
     let report = run_oracle(&module, unresolved_mark, cm);
-    report.unmarked.into_iter().map(|(n, _)| n).collect()
+    Residuals {
+        unmarked: report.unmarked.into_iter().map(|(n, _)| n).collect(),
+        dangling: report.dangling.into_iter().collect(),
+    }
 }
 
 fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
@@ -736,36 +750,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for (i, w) in output.watched.iter_mut().enumerate() {
                 w.2 = watched.counts[i];
             }
-            // Attribution: first rule after which each residual unmarked name appears.
-            let mut attribution: Vec<(Atom, &'static str)> = Vec::new();
+            // Attribution: first rule after which each residual appears.
+            let mut attribution: Vec<(&'static str, Atom, usize, &'static str)> = Vec::new();
             if attribute {
-                let pending: HashSet<Atom> = output
+                let mut pending_unmarked: HashSet<Atom> = output
                     .unmarked
                     .iter()
                     .map(|(n, _)| n.clone())
                     .filter(|n| !attributed.contains_key(n))
                     .collect();
-                if !pending.is_empty() {
-                    let mut remaining = pending;
+                let mut pending_dangling: HashSet<(Atom, usize)> =
+                    output.dangling.iter().cloned().collect();
+                if !pending_unmarked.is_empty() || !pending_dangling.is_empty() {
                     for rule in rule_names() {
-                        let present = unmarked_names_until(&cm, &name, &source, rule);
-                        let found: Vec<Atom> = remaining
+                        let present = residuals_until(&cm, &name, &source, rule);
+                        let found: Vec<Atom> = pending_unmarked
                             .iter()
-                            .filter(|n| present.contains(*n))
+                            .filter(|n| present.unmarked.contains(*n))
                             .cloned()
                             .collect();
                         for n in found {
-                            remaining.remove(&n);
+                            pending_unmarked.remove(&n);
                             attributed.insert(n.clone(), rule);
-                            attribution.push((n, rule));
+                            attribution.push(("unmarked", n, 0, rule));
                         }
-                        if remaining.is_empty() {
+                        let found: Vec<(Atom, usize)> = pending_dangling
+                            .iter()
+                            .filter(|key| present.dangling.contains(*key))
+                            .cloned()
+                            .collect();
+                        for (n, line) in found {
+                            pending_dangling.remove(&(n.clone(), line));
+                            attribution.push(("dangling", n, line, rule));
+                        }
+                        if pending_unmarked.is_empty() && pending_dangling.is_empty() {
                             break;
                         }
                     }
-                    for n in remaining {
+                    for n in pending_unmarked {
                         attributed.insert(n.clone(), "<unattributed>");
-                        attribution.push((n, "<unattributed>"));
+                        attribution.push(("unmarked", n, 0, "<unattributed>"));
+                    }
+                    for (n, line) in pending_dangling {
+                        attribution.push(("dangling", n, line, "<unattributed>"));
                     }
                 }
             }
@@ -840,7 +867,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "input_dangling": input.dangling.iter().map(|(n, l)| json!([n.as_ref(), l])).collect::<Vec<_>>(),
                 "output_dangling": output.dangling.iter().map(|(n, l)| json!([n.as_ref(), l])).collect::<Vec<_>>(),
                 "has_with": output.has_with,
-                "attribution": attribution.iter().map(|(n, r)| json!([n.as_ref(), r])).collect::<Vec<_>>(),
+                "attribution": attribution.iter().map(|(k, n, l, r)| json!([k, n.as_ref(), l, r])).collect::<Vec<_>>(),
                 "has_direct_eval": output.has_direct_eval,
                 "watched": output.watched.iter().map(|(n, d, r, c)| json!({"name": n.as_ref(), "declared": d, "refs": r, "captured": c})).collect::<Vec<_>>(),
             })
