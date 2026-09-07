@@ -2764,3 +2764,28 @@ class Foo extends Base {
 "#;
     assert_eq_normalized(&apply(input), expected);
 }
+
+#[test]
+fn same_named_inner_constructor_references_follow_the_class_binding() {
+    // Minifiers give the IIFE's inner constructor the same name as the outer
+    // variable. The method's `new e(...)` must end up on the class binding, so
+    // a later rename of the class carries it along.
+    let input = r#"
+var e = function() {
+    function e(e, t) {
+        this.x = e;
+        this.y = t;
+    }
+    var t = e.prototype;
+    t.derive = function(n, r) {
+        return new e(n, r);
+    };
+    return e;
+}();
+exports.Vector = e;
+"#;
+    let output = render(input);
+    assert!(output.contains("export class Vector"), "{output}");
+    assert!(output.contains("return new Vector(n, r);"), "{output}");
+    assert!(!output.contains("new e("), "{output}");
+}

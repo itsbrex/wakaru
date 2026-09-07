@@ -1267,14 +1267,16 @@ fn try_iife_to_class(
             return None;
         }
     }
-    if class_name.sym.as_ref() != inner_ctor_name
-        && class_members_reference_binding(
-            &class_body,
-            &inner_ctor_ident.sym,
-            inner_ctor_ident.ctxt,
-        )
-    {
-        return None;
+    if class_members_reference_binding(&class_body, &inner_ctor_ident.sym, inner_ctor_ident.ctxt) {
+        if class_name.sym.as_ref() != inner_ctor_name {
+            return None;
+        }
+        // Minifiers give the inner constructor the outer variable's name, so
+        // the two bindings print alike but differ in context. The inner one
+        // disappears with the IIFE; move its references onto the class
+        // binding, or a later identity-keyed rename of the class leaves
+        // `new e(...)` behind.
+        retarget_class_member_references(&mut class_body, &inner_ctor_ident.to_id(), class_name);
     }
 
     // Use the original statement's span for the class so that source maps
@@ -1330,6 +1332,25 @@ fn class_members_reference_binding(
     };
     members.visit_with(&mut finder);
     finder.found
+}
+
+/// Give every reference to `from` inside the class members the identity of
+/// `to`, which prints the same name.
+fn retarget_class_member_references(members: &mut Vec<ClassMember>, from: &BindingKey, to: &Ident) {
+    struct Retarget<'a> {
+        from: &'a BindingKey,
+        to: &'a Ident,
+    }
+
+    impl VisitMut for Retarget<'_> {
+        fn visit_mut_ident(&mut self, id: &mut Ident) {
+            if id.sym == self.from.0 && id.ctxt == self.from.1 {
+                id.ctxt = self.to.ctxt;
+            }
+        }
+    }
+
+    members.visit_mut_with(&mut Retarget { from, to });
 }
 
 /// Scan an IIFE body for an inline `_inherits` IIFE call and extract the super class expression.
