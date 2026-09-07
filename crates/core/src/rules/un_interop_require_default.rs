@@ -134,16 +134,17 @@ fn run_un_interop_require_default(module: &mut Module, local_helpers: &LocalHelp
 
     // Phase 3: Remove helper declarations.
     if !helpers.is_empty() && !preserve_named_helpers {
-        // Keep the historical direct-helper cleanup policy out of this merge
-        // unit. Namespace bindings are different because the object can have
-        // meaningful non-call uses after every recognized `._(...)` call is
-        // consumed; retain just those proven SWC namespace bindings when a
-        // reference remains.
-        let retained_swc_member_helpers =
-            helpers_with_remaining_refs(module, &swc_member_helper_namespaces);
+        // Only a helper with no reference left outside its own declaration is
+        // removable. A surviving reference is a use the unwrapper does not
+        // rewrite: the helper is the module's own export (Babel's runtime
+        // `interopRequireDefault` module is exactly this shape), it is
+        // re-exported or aliased, or an SWC namespace object keeps a non-call
+        // use after every recognized `._(...)` call is consumed. Removing the
+        // declaration in any of those cases leaves a dangling reference.
+        let retained_helpers = helpers_with_remaining_refs(module, &helpers);
         let removable_helpers: HashMap<BindingKey, TranspilerHelperKind> = helpers
             .into_iter()
-            .filter(|(key, _)| !retained_swc_member_helpers.contains(key))
+            .filter(|(key, _)| !retained_helpers.contains(key))
             .collect();
         remove_helper_declarations(&mut module.body, &removable_helpers);
     }

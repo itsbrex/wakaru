@@ -210,7 +210,10 @@ For example, `UnInteropRequireDefault`:
 - `var _a = _interopRequireDefault(require("a"))` becomes `var _a = require("a")`
 - `_a.default` becomes `_a` (at all reference sites), removing exactly one
   interop layer; deeper authored layers are retained
-- The now-unused helper declaration is removed
+- The helper declaration is removed only when no reference to it survives
+  outside the declaration itself. A helper that is the module's own export
+  (Babel's runtime `interopRequireDefault` module), re-exported, or aliased
+  keeps its declaration
 
 SWC AMD's assignment form `_a = _interopRequireDefault(_a)` — and the modern
 external-helper spelling `_a = helper._(_a)`, proven against the exact
