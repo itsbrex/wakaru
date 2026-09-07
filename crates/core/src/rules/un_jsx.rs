@@ -1,16 +1,18 @@
 use std::collections::{HashMap, HashSet};
 
 use swc_core::atoms::{Atom, Wtf8Atom};
+use swc_core::common::util::take::Take;
 use swc_core::common::{Mark, SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
-    ArrowExpr, AssignExpr, AssignOp, BindingIdent, BlockStmt, Bool, CallExpr, Callee, Decl, Expr,
-    ExprOrSpread, FunctionBody, Ident, ImportDecl, ImportSpecifier, JSXAttr, JSXAttrName,
-    JSXAttrOrSpread, JSXAttrValue, JSXClosingElement, JSXClosingFragment, JSXElement,
-    JSXElementChild, JSXElementName, JSXExpr, JSXExprContainer, JSXFragment, JSXMemberExpr,
-    JSXNamespacedName, JSXObject, JSXOpeningElement, JSXOpeningFragment, JSXSpreadChild, JSXText,
-    KeyValueProp, Lit, MemberExpr, MemberProp, Module, ModuleDecl, ModuleExportName, ModuleItem,
-    NewExpr, Number, ObjectLit, OptCall, Param, Pat, Prop, PropName, PropOrSpread, SpreadElement,
-    Stmt, Str, TaggedTpl, VarDecl, VarDeclKind, VarDeclarator,
+    ArrowExpr, ArrowFunctionBody, AssignExpr, AssignOp, BindingIdent, BlockStmt, Bool, CallExpr,
+    Callee, Class, Decl, Expr, ExprOrSpread, Function, FunctionBody, Ident, ImportDecl,
+    ImportSpecifier, JSXAttr, JSXAttrName, JSXAttrOrSpread, JSXAttrValue, JSXClosingElement,
+    JSXClosingFragment, JSXElement, JSXElementChild, JSXElementName, JSXExpr, JSXExprContainer,
+    JSXFragment, JSXMemberExpr, JSXNamespacedName, JSXObject, JSXOpeningElement,
+    JSXOpeningFragment, JSXSpreadChild, JSXText, KeyValueProp, Lit, MemberExpr, MemberProp, Module,
+    ModuleDecl, ModuleExportName, ModuleItem, NewExpr, Number, ObjectLit, OptCall, Param, Pat,
+    Prop, PropName, PropOrSpread, ReturnStmt, SpreadElement, Stmt, Str, TaggedTpl, VarDecl,
+    VarDeclKind, VarDeclarator,
 };
 use swc_core::ecma::utils::find_pat_ids;
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
@@ -44,6 +46,11 @@ pub struct UnJsx {
     unresolved_mark: Mark,
     level: RewriteLevel,
     pending_stmts: Vec<Vec<Stmt>>,
+    /// The function depth each `pending_stmts` frame was opened at. An alias
+    /// may only be hoisted into a frame of the current depth: a frame of an
+    /// enclosing function runs in a different scope and at a different time.
+    frame_depths: Vec<usize>,
+    function_depth: usize,
     used_names: Vec<HashSet<Atom>>,
     string_consts: Vec<HashMap<BindingId, Str>>,
     import_pragmas: HashMap<BindingId, &'static str>,
@@ -60,6 +67,8 @@ impl UnJsx {
             unresolved_mark,
             level,
             pending_stmts: Vec::new(),
+            frame_depths: Vec::new(),
+            function_depth: 0,
             used_names: Vec::new(),
             string_consts: Vec::new(),
             import_pragmas: HashMap::new(),
@@ -144,9 +153,9 @@ impl UnJsx {
         let old = std::mem::take(items);
         let mut rewritten = Vec::with_capacity(old.len());
         for mut item in old {
-            self.pending_stmts.push(Vec::new());
+            self.push_pending_frame();
             item.visit_mut_with(self);
-            let pending = self.pending_stmts.pop().unwrap();
+            let pending = self.pop_pending_frame();
             rewritten.extend(pending.into_iter().map(ModuleItem::Stmt));
             rewritten.push(item);
         }
@@ -176,9 +185,9 @@ impl UnJsx {
         let old = std::mem::take(stmts);
         let mut rewritten = Vec::with_capacity(old.len());
         for mut stmt in old {
-            self.pending_stmts.push(Vec::new());
+            self.push_pending_frame();
             stmt.visit_mut_with(self);
-            let pending = self.pending_stmts.pop().unwrap();
+            let pending = self.pop_pending_frame();
             rewritten.extend(pending);
             rewritten.push(stmt);
         }
@@ -219,8 +228,9 @@ impl UnJsx {
                 } else {
                     "Component"
                 };
-                let alias = self.create_component_alias(type_expr, base);
-                tag = Some(JSXElementName::Ident(alias));
+                tag = self
+                    .create_component_alias(type_expr, base)
+                    .map(JSXElementName::Ident);
             }
         }
 
@@ -313,7 +323,24 @@ impl UnJsx {
         None
     }
 
-    fn create_component_alias(&mut self, expr: &Expr, base: &str) -> Ident {
+    fn push_pending_frame(&mut self) {
+        self.pending_stmts.push(Vec::new());
+        self.frame_depths.push(self.function_depth);
+    }
+
+    fn pop_pending_frame(&mut self) -> Vec<Stmt> {
+        self.frame_depths.pop();
+        self.pending_stmts.pop().unwrap()
+    }
+
+    /// `None` when no statement list of the current function can take the
+    /// alias declaration: the expression sits in a parameter default, a class
+    /// field initializer, or another position outside any statement list of
+    /// its own function.
+    fn create_component_alias(&mut self, expr: &Expr, base: &str) -> Option<Ident> {
+        if self.frame_depths.last() != Some(&self.function_depth) {
+            return None;
+        }
         let name = self.generate_name(base.to_string());
         let ident = fresh_binding_ident(name.clone().into(), DUMMY_SP);
         if let Some(pending) = self.pending_stmts.last_mut() {
@@ -333,7 +360,7 @@ impl UnJsx {
                 }],
             }))));
         }
-        ident
+        Some(ident)
     }
 
     fn generate_name(&mut self, base: String) -> String {
@@ -623,6 +650,45 @@ impl VisitMut for UnJsx {
         } else {
             body.visit_mut_children_with(self);
         }
+    }
+
+    fn visit_mut_function(&mut self, function: &mut Function) {
+        self.function_depth += 1;
+        function.visit_mut_children_with(self);
+        self.function_depth -= 1;
+    }
+
+    fn visit_mut_class(&mut self, class: &mut Class) {
+        self.function_depth += 1;
+        class.visit_mut_children_with(self);
+        self.function_depth -= 1;
+    }
+
+    fn visit_mut_arrow_expr(&mut self, arrow: &mut ArrowExpr) {
+        self.function_depth += 1;
+        arrow.params.visit_mut_with(self);
+        match arrow.body.as_mut() {
+            ArrowFunctionBody::FunctionBody(body) => body.visit_mut_with(self),
+            ArrowFunctionBody::Expr(expr) => {
+                // An expression body has no statement list; open one for it
+                // and, if an alias lands there, turn the body into a block so
+                // the alias is evaluated on every call, in the arrow's scope.
+                self.push_pending_frame();
+                expr.visit_mut_with(self);
+                let mut stmts = self.pop_pending_frame();
+                if !stmts.is_empty() {
+                    stmts.push(Stmt::Return(ReturnStmt {
+                        span: DUMMY_SP,
+                        arg: Some(expr.take()),
+                    }));
+                    *arrow.body = ArrowFunctionBody::FunctionBody(FunctionBody {
+                        span: DUMMY_SP,
+                        stmts,
+                    });
+                }
+            }
+        }
+        self.function_depth -= 1;
     }
 
     fn visit_mut_member_expr(&mut self, member: &mut MemberExpr) {

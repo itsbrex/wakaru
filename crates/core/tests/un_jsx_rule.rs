@@ -768,3 +768,36 @@ function F(t) {
     assert!(output.contains("function F(t)"), "{output}");
     assert!(output.contains("t.displayName = \"Foo\";"), "{output}");
 }
+
+#[test]
+fn inline_component_alias_stays_inside_an_expression_bodied_arrow() {
+    // The tag expression reads the arrow's parameter and must be evaluated on
+    // every call; the alias belongs in the arrow's body, not before it.
+    let input = r#"
+const Icon = ({ type: t }) => React.createElement(pick(t), { className: "x" });
+"#;
+    let output = render_with_level(input, RewriteLevel::Standard);
+    assert!(!output.starts_with("const Component"), "{output}");
+    assert!(output.contains("const Component = pick(t);"), "{output}");
+    assert!(
+        output.contains("return <Component className=\"x\"/>;"),
+        "{output}"
+    );
+}
+
+#[test]
+fn inline_component_alias_is_not_hoisted_out_of_a_class_field_initializer() {
+    // No statement list inside the initializer can hold the alias, and the
+    // enclosing one runs in a different scope; leave the call as it is.
+    let input = r#"
+class Panel {
+    icon = React.createElement(pick(this.kind), null);
+}
+"#;
+    let output = render_with_level(input, RewriteLevel::Standard);
+    assert!(!output.contains("Component"), "{output}");
+    assert!(
+        output.contains("React.createElement(pick(this.kind), null)"),
+        "{output}"
+    );
+}
