@@ -886,3 +886,38 @@ function count() {
     assert!(output.contains("var r = n.length;"), "{output}");
     assert!(output.contains("return r;"), "{output}");
 }
+
+#[test]
+fn tail_copy_index_keeps_its_initial_value_when_arguments_are_missing() {
+    let input = r#"
+function f(a) {
+    var args = [];
+    for (var i = 1; i < arguments.length; i++) args[i - 1] = arguments[i];
+    return i;
+}
+"#;
+    let expected = r#"
+function f(a, ...args) {
+    var i = arguments.length < 1 ? 1 : arguments.length;
+    return i;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn tail_copy_length_and_index_keep_distinct_terminal_values() {
+    let input = r#"
+function f(a, b) {
+    for (var len = arguments.length, args = Array(len > 2 ? len - 2 : 0), i = 2; i < len; i++) args[i - 2] = arguments[i];
+    return [len, i, args];
+}
+"#;
+    let expected = r#"
+function f(a, b, ...args) {
+    var len = arguments.length, i = arguments.length < 2 ? 2 : arguments.length;
+    return [len, i, args];
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}

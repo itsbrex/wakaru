@@ -3,10 +3,10 @@ use std::collections::HashSet;
 use swc_core::atoms::Atom;
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
-    AssignOp, AssignTarget, BinaryOp, BindingIdent, Callee, Constructor, Decl, Expr, Function,
-    FunctionBody, Ident, Lit, MemberExpr, MemberProp, Number, Param, ParamOrTsParamProp, Pat,
-    RestPat, SimpleAssignTarget, Stmt, UpdateOp, VarDecl, VarDeclKind, VarDeclOrExpr,
-    VarDeclarator,
+    AssignOp, AssignTarget, BinExpr, BinaryOp, BindingIdent, Callee, CondExpr, Constructor, Decl,
+    Expr, Function, FunctionBody, Ident, Lit, MemberExpr, MemberProp, Number, Param,
+    ParamOrTsParamProp, Pat, RestPat, SimpleAssignTarget, Stmt, UpdateOp, VarDecl, VarDeclKind,
+    VarDeclOrExpr, VarDeclarator,
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
@@ -974,10 +974,10 @@ fn remove_arguments_copy_loop(body: &mut FunctionBody, fixed_param_count: usize)
 }
 
 /// The `var` bindings a copy loop's head declares other than the copy itself,
-/// each paired with the loop's own `arguments.length` expression: once the
-/// loop has run, that is the value each of them holds. The expression is
-/// cloned rather than rebuilt so it keeps the resolver's context and the
-/// rewriter that follows turns it into the rest parameter's length.
+/// each paired with its terminal value. The length alias keeps
+/// `arguments.length`, while the index cannot finish below its initial value
+/// when fewer arguments than fixed parameters were supplied. Clone expressions
+/// so references retain their resolver contexts.
 fn copy_loop_side_bindings(stmt: &Stmt, copy: &BindingId) -> Vec<(Ident, Box<Expr>)> {
     let Stmt::For(for_stmt) = stmt else {
         return Vec::new();
@@ -1001,7 +1001,23 @@ fn copy_loop_side_bindings(stmt: &Stmt, copy: &BindingId) -> Vec<(Ident, Box<Exp
         .iter()
         .filter_map(|decl| match &decl.name {
             Pat::Ident(binding) if binding_id(&binding.id) != *copy => {
-                Some((binding.id.clone(), Box::new(length.clone())))
+                let value = match decl.init.as_deref() {
+                    Some(start @ Expr::Lit(Lit::Num(number))) if number.value > 0.0 => {
+                        Expr::Cond(CondExpr {
+                            span: DUMMY_SP,
+                            test: Box::new(Expr::Bin(BinExpr {
+                                span: DUMMY_SP,
+                                op: BinaryOp::Lt,
+                                left: Box::new(length.clone()),
+                                right: Box::new(start.clone()),
+                            })),
+                            cons: Box::new(start.clone()),
+                            alt: Box::new(length.clone()),
+                        })
+                    }
+                    _ => length.clone(),
+                };
+                Some((binding.id.clone(), Box::new(value)))
             }
             _ => None,
         })
