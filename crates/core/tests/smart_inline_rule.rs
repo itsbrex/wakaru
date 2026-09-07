@@ -1701,3 +1701,41 @@ function factory(l) {
     assert!(!output.contains("const x"), "{output}");
     assert!(!output.contains("const $"), "{output}");
 }
+
+#[test]
+fn generated_alias_chain_preserves_shadowed_source_at_final_use() {
+    let input = r#"
+function f(D) {
+    const x = D;
+    const y = x;
+    { let D = 2; console.log(y, D); }
+}
+"#;
+    let expected = r#"
+function f(D) {
+    const y = D;
+    { let D = 2; console.log(y, D); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+    assert_eq_normalized(&apply_pipeline(input), expected);
+}
+
+#[test]
+fn longer_alias_chain_preserves_shadowed_source_at_final_use() {
+    let input = r#"
+function f(D) {
+    const x = D;
+    const y = x;
+    const z = y;
+    { let D = 2; console.log(z, D); }
+}
+"#;
+    let expected = r#"
+function f(D) {
+    const z = D;
+    { let D = 2; console.log(z, D); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}

@@ -730,7 +730,24 @@ fn inline_temp_vars(
     // `const x = D, $ = x; use($)`: `$` maps to `x` and `x` to `D`, and both
     // declarations go. The inliner does not revisit a replacement, so the
     // chain is resolved here: every alias maps to the surviving source.
-    let to_inline = resolve_alias_chains(to_inline);
+    let mut to_inline = resolve_alias_chains(to_inline);
+    // The final source can differ from the immediate source checked above.
+    // Keep an alias when that final spelling would be captured at its use.
+    // Its initializer still receives the safe substitutions for earlier links.
+    to_inline.retain(|key, init| {
+        let Expr::Ident(source) = init.as_ref() else {
+            return false;
+        };
+        let Some(use_idx) = analysis.candidate(key).and_then(|usage| usage.use_stmt_idx) else {
+            return false;
+        };
+        let mut finder = DifferentContextSameNameFinder {
+            source,
+            found: false,
+        };
+        stmts[use_idx].visit_with(&mut finder);
+        !finder.found
+    });
 
     // Apply inlining: remove definition stmts, replace single usage with init expr
     let mut result = Vec::new();

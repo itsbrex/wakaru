@@ -595,9 +595,11 @@ deliberately does not simulate
 expression evaluation order: once the local source is proven frozen, delaying
 its read is harmless; otherwise the alias stays.
 
-Candidate declarations still participate in reference counting. This prevents
-two independently removable aliases from forming a replacement chain whose
-intermediate binding is deleted before a non-recursive substitution uses it.
+Candidate declarations still participate in reference counting. Replacement
+chains are resolved to their surviving source before substitution, and that
+source's emitted name is checked again at each alias's use. If it would be
+captured there, the alias stays declared while its initializer receives safe
+substitutions for earlier links.
 
 ## Dynamic Scope Limits
 
