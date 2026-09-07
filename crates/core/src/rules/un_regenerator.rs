@@ -1755,6 +1755,12 @@ fn decode_babel_state_machine(
         let mut catch_aliases = Vec::new();
         let catch_binding = catch_bindings.for_label(idx, &trys);
         let stmts = &case.cons;
+        // The label the decoded statements belong to. Regenerator numbers
+        // every instruction but only emits a `case` for jump targets, so a try
+        // entry that nothing jumps to (`_ctx.prev = N` after a guard in the
+        // same case) starts mid-case: statements after it sit at label N of the
+        // try table, not at the case label.
+        let mut label = idx;
         let mut i = 0;
         while i < stmts.len() {
             let stmt = &stmts[i];
@@ -1771,10 +1777,11 @@ fn decode_babel_state_machine(
                 if let Some(target) = extract_state_next_assign_target(state_name, stmt) {
                     if i + 1 < stmts.len() && matches!(stmts[i + 1], Stmt::Break(_)) {
                         if target > 0
-                            && (target < idx || (target > idx && Some(target) != next_case_label))
-                            && !is_try_region_exit(idx, target, &trys)
+                            && (target < label
+                                || (target > label && Some(target) != next_case_label))
+                            && !is_try_region_exit(label, target, &trys)
                         {
-                            flat.push((idx, jump_return_stmt(target)));
+                            flat.push((label, jump_return_stmt(target)));
                         }
                         i += 2;
                         continue;
@@ -1784,8 +1791,14 @@ fn decode_babel_state_machine(
                 continue;
             }
 
-            // Skip Babel's `_ctx.prev = N` / `_ctx.p = N` bookkeeping.
+            // Babel's `_ctx.prev = N` / `_ctx.p = N` bookkeeping. A try entry
+            // past the case label relabels the rest of the case (see `label`).
             if is_prev_assign(state_name, stmt) {
+                if let Some(entry) = extract_prev_assign_target(state_name, stmt) {
+                    if entry > label && trys.iter().any(|region| region[0] == Some(entry)) {
+                        label = entry;
+                    }
+                }
                 i += 1;
                 continue;
             }
@@ -1822,7 +1835,7 @@ fn decode_babel_state_machine(
             }
 
             if let Some((decoded, consumed)) = decode_nested_state_jump(state_name, &stmts[i..]) {
-                flat.push((idx, decoded));
+                flat.push((label, decoded));
                 i += consumed;
                 continue;
             }
@@ -1833,7 +1846,7 @@ fn decode_babel_state_machine(
                     match decoded {
                         DecodedReturn::Return(expr) => {
                             flat.push((
-                                idx,
+                                label,
                                 Stmt::Return(ReturnStmt {
                                     span: DUMMY_SP,
                                     arg: Some(expr),
@@ -1842,7 +1855,7 @@ fn decode_babel_state_machine(
                         }
                         DecodedReturn::ReturnVoid => {
                             flat.push((
-                                idx,
+                                label,
                                 Stmt::Return(ReturnStmt {
                                     span: DUMMY_SP,
                                     arg: None,
@@ -1851,7 +1864,7 @@ fn decode_babel_state_machine(
                         }
                         DecodedReturn::Throw(expr) => {
                             flat.push((
-                                idx,
+                                label,
                                 Stmt::Throw(swc_core::ecma::ast::ThrowStmt {
                                     span: DUMMY_SP,
                                     arg: expr,
@@ -1862,7 +1875,7 @@ fn decode_babel_state_machine(
                         DecodedReturn::CommaYield(expr) => {
                             // return _ctx.next = N, value → yield value
                             flat.push((
-                                idx,
+                                label,
                                 Stmt::Expr(ExprStmt {
                                     span: DUMMY_SP,
                                     expr: Box::new(Expr::Yield(YieldExpr {
@@ -1892,10 +1905,10 @@ fn decode_babel_state_machine(
                                 {
                                     skip_delegate_result_assignments
                                         .insert((next_loc, assign_index));
-                                    flat.push((idx, assign_stmt));
+                                    flat.push((label, assign_stmt));
                                 } else {
                                     flat.push((
-                                        idx,
+                                        label,
                                         Stmt::Expr(ExprStmt {
                                             span: DUMMY_SP,
                                             expr: delegate_yield_expr(expr),
@@ -1904,7 +1917,7 @@ fn decode_babel_state_machine(
                                 }
                             } else {
                                 flat.push((
-                                    idx,
+                                    label,
                                     Stmt::Expr(ExprStmt {
                                         span: DUMMY_SP,
                                         expr: delegate_yield_expr(expr),
@@ -1920,7 +1933,7 @@ fn decode_babel_state_machine(
                 if let Some(arg) = &ret.arg {
                     if !is_stop_call(state_name, arg) {
                         flat.push((
-                            idx,
+                            label,
                             Stmt::Expr(ExprStmt {
                                 span: DUMMY_SP,
                                 expr: Box::new(Expr::Yield(YieldExpr {
@@ -1946,7 +1959,7 @@ fn decode_babel_state_machine(
             }
 
             // Regular statement — emit as-is
-            flat.push((idx, stmt));
+            flat.push((label, stmt));
             i += 1;
         }
     }
@@ -2661,6 +2674,24 @@ fn is_prev_assign(state_name: &Atom, stmt: &Stmt) -> bool {
         return false;
     };
     is_ident_with_name(&left_member.obj, state_name) && is_prev_prop(&left_member.prop)
+}
+
+/// The label a `_ctx.prev = N` / `_ctx.p = N` statement records.
+fn extract_prev_assign_target(state_name: &Atom, stmt: &Stmt) -> Option<usize> {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return None;
+    };
+    let Expr::Assign(assign) = expr.as_ref() else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign {
+        return None;
+    }
+    let left_member = assign.left.as_simple().and_then(|s| s.as_member())?;
+    if !is_ident_with_name(&left_member.obj, state_name) || !is_prev_prop(&left_member.prop) {
+        return None;
+    }
+    number_lit_usize(&assign.right)
 }
 
 fn is_prev_prop(prop: &MemberProp) -> bool {

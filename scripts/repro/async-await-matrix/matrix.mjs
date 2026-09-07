@@ -138,6 +138,82 @@ const snippets = [
     ],
   },
   {
+    name: "async-branch-guarded-try-catch",
+    // The try region starts at a label that is only reached through the
+    // conditional jump in the entry state. Recovery must keep the try/catch
+    // inside that branch; dropping it makes the catch body run unconditionally.
+    source:
+      "async function load_resource(loader, path, options) {\n  if (loader.lazy) {\n    try {\n      await loader.load(path, options);\n    } catch (error) {\n      report_error(error);\n    }\n  } else {\n    loader.load(path, options).catch(report_error);\n  }\n}\n",
+    // The lowered machine tests the negated guard first, so the recovered
+    // branches may come back in the opposite order.
+    acceptForms: [
+      "async function load_resource(loader, path, options) {\n  if (!loader.lazy) {\n    loader.load(path, options).catch(report_error);\n  } else {\n    try {\n      await loader.load(path, options);\n    } catch (error) {\n      report_error(error);\n    }\n  }\n}\n",
+    ],
+    expected: [
+      "async function load_resource(loader, path, options)",
+      "loader.lazy",
+      "try",
+      "await loader.load(path, options)",
+      "catch (error)",
+      "report_error(error)",
+      "loader.load(path, options).catch(report_error)",
+    ],
+  },
+  {
+    name: "async-guarded-try-catch",
+    // Same guarded try region without an else branch: the guard jumps
+    // straight to the end of the machine.
+    source:
+      "async function load_resource(loader, path, options) {\n  if (loader.lazy) {\n    try {\n      await loader.load(path, options);\n    } catch (error) {\n      report_error(error);\n    }\n  }\n}\n",
+    expected: [
+      "async function load_resource(loader, path, options)",
+      "if (loader.lazy)",
+      "try",
+      "await loader.load(path, options)",
+      "catch (error)",
+      "report_error(error)",
+    ],
+  },
+  {
+    name: "async-try-catch-after-statement",
+    // A synchronous statement before the try: regenerator numbers the try
+    // entry after it without starting a new case for it.
+    source:
+      "async function load_resource(loader, path) {\n  const started = start_timer();\n  try {\n    await loader.load(path);\n  } catch (error) {\n    report_error(error, started);\n  }\n}\n",
+    // Mangled shapes keep the hoisted temp split from its assignment.
+    acceptForms: [
+      "async function load_resource(loader, path) {\n  let started = start_timer();\n  try {\n    await loader.load(path);\n  } catch (error) {\n    report_error(error, started);\n  }\n}\n",
+      "async function load_resource(loader, path) {\n  let started;\n  started = start_timer();\n  try {\n    await loader.load(path);\n  } catch (error) {\n    report_error(error, started);\n  }\n}\n",
+    ],
+    expected: [
+      "async function load_resource(loader, path)",
+      "started = start_timer()",
+      "try",
+      "await loader.load(path)",
+      "catch (error)",
+      "report_error(error, started)",
+    ],
+  },
+  {
+    name: "async-try-if-else-await",
+    // Both branches of an if/else inside the try body leave the region through
+    // the same exit jump.
+    source:
+      "async function load_resource(loader, path) {\n  try {\n    if (loader.lazy) {\n      await loader.load_lazy(path);\n    } else {\n      await loader.load(path);\n    }\n  } catch (error) {\n    report_error(error);\n  }\n}\n",
+    acceptForms: [
+      "async function load_resource(loader, path) {\n  try {\n    if (!loader.lazy) {\n      await loader.load(path);\n    } else {\n      await loader.load_lazy(path);\n    }\n  } catch (error) {\n    report_error(error);\n  }\n}\n",
+    ],
+    expected: [
+      "async function load_resource(loader, path)",
+      "try",
+      "loader.lazy",
+      "await loader.load_lazy(path)",
+      "await loader.load(path)",
+      "catch (error)",
+      "report_error(error)",
+    ],
+  },
+  {
     name: "async-loop-try-catch",
     source:
       "async function collect_enabled(items) {\n  const output = [];\n  for (let index = 0; index < items.length; index++) {\n    const item = items[index];\n    if (!item.enabled) {\n      continue;\n    }\n    try {\n      output.push(await fetch_item(item.id));\n    } catch (error) {\n      output.push(await recover_item(item, error));\n    }\n  }\n  return output;\n}\n",

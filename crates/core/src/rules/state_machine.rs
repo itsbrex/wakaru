@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ops::Range;
 
 use swc_core::atoms::Atom;
 use swc_core::common::util::take::Take;
@@ -49,12 +50,19 @@ pub(crate) enum IndexLoopContinueMode {
     SingleBodyJumpTarget,
 }
 
+/// One try-table entry: the `try_start`, `catch_start`, `finally_start`, and
+/// `next` labels, each optional.
+pub(crate) type TryRegion = [Option<usize>; 4];
+
 /// Label-indexed state-machine output after opcode decoding, before structured
 /// control-flow recovery finishes.
 #[derive(Clone)]
 pub(crate) struct StateMachineProgram {
     blocks: Vec<StateBlock>,
-    try_regions: Vec<[Option<usize>; 4]>,
+    /// Indexed like the decoder's try table, which `catch_bindings` shares. A
+    /// region that branch recovery already rebuilt inside a folded branch is
+    /// `None`, so the final reconstruction does not emit it a second time.
+    try_regions: Vec<Option<TryRegion>>,
     catch_bindings: CatchBindings,
 }
 
@@ -132,14 +140,14 @@ impl CatchBindings {
 impl StateMachineProgram {
     pub(crate) fn from_labeled_stmts(
         stmts: Vec<(usize, Stmt)>,
-        try_regions: Vec<[Option<usize>; 4]>,
+        try_regions: Vec<TryRegion>,
     ) -> Self {
         Self {
             blocks: stmts
                 .into_iter()
                 .map(|(label, stmt)| StateBlock::new(label, vec![stmt]))
                 .collect(),
-            try_regions,
+            try_regions: try_regions.into_iter().map(Some).collect(),
             catch_bindings: CatchBindings::default(),
         }
     }
@@ -155,8 +163,9 @@ impl StateMachineProgram {
         join_mode: ForwardJumpJoin,
     ) -> Self {
         self.blocks = resolve_labeled_forward_jump_blocks(
-            self.blocks,
-            &self.try_regions,
+            std::mem::take(&mut self.blocks),
+            &mut self.try_regions,
+            &mut self.catch_bindings,
             opcode_scan,
             join_mode,
         );
@@ -164,26 +173,32 @@ impl StateMachineProgram {
     }
 
     pub(crate) fn recover_conditional_assignments(mut self) -> Self {
-        self.blocks = recover_conditional_assignment_blocks(self.blocks);
+        let regions = active_regions(&self.try_regions);
+        self.blocks =
+            recover_conditional_assignment_blocks(std::mem::take(&mut self.blocks), &regions);
         self
     }
 
     pub(crate) fn recover_conditional_branches(mut self, opcode_scan: OpcodeReturnScan) -> Self {
-        self.blocks = recover_conditional_branch_blocks(self.blocks, opcode_scan);
+        self.blocks = recover_conditional_branch_blocks(
+            std::mem::take(&mut self.blocks),
+            &mut self.try_regions,
+            &mut self.catch_bindings,
+            opcode_scan,
+        );
         self
     }
 
     pub(crate) fn into_reconstructed_stmts(self) -> Vec<Stmt> {
+        let regions = active_regions(&self.try_regions);
         let Self {
             blocks,
-            try_regions,
             mut catch_bindings,
+            ..
         } = self;
-        reconstruct_with_regions(
-            label_stmts_from_blocks(blocks),
-            &try_regions,
-            &mut catch_bindings,
-        )
+        let label_stmts = label_stmts_from_blocks(blocks);
+        let end = label_stmts.len();
+        reconstruct_label_range(&label_stmts, 0..end, &regions, &mut catch_bindings)
     }
 
     pub(crate) fn into_reconstructed_stmts_with_index_loops(
@@ -263,12 +278,95 @@ fn label_stmts_from_blocks(blocks: Vec<StateBlock>) -> Vec<Vec<Stmt>> {
     label_stmts
 }
 
-fn recover_conditional_assignment_blocks(blocks: Vec<StateBlock>) -> Vec<StateBlock> {
+/// The regions still awaiting reconstruction, with their try-table index.
+fn active_regions(try_regions: &[Option<TryRegion>]) -> Vec<(usize, TryRegion)> {
+    try_regions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, region)| Some((index, (*region)?)))
+        .collect()
+}
+
+/// Splits the active try regions touched by a fold over labels
+/// `start_label..join` into the regions to rebuild inside its first branch
+/// (`start_label..split`) and inside its second branch (`split..join`). Regions
+/// wholly outside the fold, or enclosing all of it, need nothing and are not
+/// returned. `None` when a region straddles the guard, the split, or the join:
+/// rebuilding it on either side would move statements across its
+/// try/catch/finally edges.
+fn place_regions_in_branches(
+    try_regions: &[Option<TryRegion>],
+    start_label: usize,
+    split: usize,
+    join: usize,
+) -> Option<(Vec<(usize, TryRegion)>, Vec<(usize, TryRegion)>)> {
+    let mut first = Vec::new();
+    let mut second = Vec::new();
+    for (index, region) in active_regions(try_regions) {
+        let touches_fold = region
+            .iter()
+            .flatten()
+            .any(|&boundary| start_label < boundary && boundary < join);
+        if !touches_fold {
+            continue;
+        }
+        let start = region[0]?;
+        let end = region[3].or(region[2]).or(region[1])?;
+        if start > start_label && end <= split {
+            first.push((index, region));
+        } else if start >= split && end <= join {
+            second.push((index, region));
+        } else {
+            return None;
+        }
+    }
+    Some((first, second))
+}
+
+/// Flattens the blocks of one folded branch, rebuilding the try regions placed
+/// inside it. `None` when a block lies outside `range`, which the label-ordered
+/// block walk never produces for well-formed machines.
+fn reconstruct_branch_blocks(
+    blocks: Vec<StateBlock>,
+    range: Range<usize>,
+    regions: &[(usize, TryRegion)],
+    catch_bindings: &mut CatchBindings,
+) -> Option<Vec<Stmt>> {
+    if blocks.iter().any(|block| !range.contains(&block.label)) {
+        return None;
+    }
+    if regions.is_empty() {
+        return Some(blocks.into_iter().flat_map(|block| block.stmts).collect());
+    }
+    let mut label_stmts: Vec<Vec<Stmt>> = vec![vec![]; range.end];
+    for block in blocks {
+        label_stmts[block.label].extend(block.stmts);
+    }
+    Some(reconstruct_label_range(
+        &label_stmts,
+        range,
+        regions,
+        catch_bindings,
+    ))
+}
+
+fn mark_regions_folded(try_regions: &mut [Option<TryRegion>], folded: &[(usize, TryRegion)]) {
+    for (index, _) in folded {
+        try_regions[*index] = None;
+    }
+}
+
+fn recover_conditional_assignment_blocks(
+    blocks: Vec<StateBlock>,
+    regions: &[(usize, TryRegion)],
+) -> Vec<StateBlock> {
     let mut result = Vec::new();
     let mut index = 0usize;
 
     while index < blocks.len() {
-        if let Some((block, consumed)) = try_recover_conditional_assignment(&blocks[index..]) {
+        if let Some((block, consumed)) =
+            try_recover_conditional_assignment(&blocks[index..], regions)
+        {
             result.push(block);
             index += consumed;
         } else {
@@ -280,7 +378,10 @@ fn recover_conditional_assignment_blocks(blocks: Vec<StateBlock>) -> Vec<StateBl
     result
 }
 
-fn try_recover_conditional_assignment(blocks: &[StateBlock]) -> Option<(StateBlock, usize)> {
+fn try_recover_conditional_assignment(
+    blocks: &[StateBlock],
+    regions: &[(usize, TryRegion)],
+) -> Option<(StateBlock, usize)> {
     let first_block = blocks.first()?;
     let start_label = first_block.label;
     let StateTerminator::ConditionalJump { test, target } = first_block.terminator() else {
@@ -307,6 +408,18 @@ fn try_recover_conditional_assignment(blocks: &[StateBlock]) -> Option<(StateBlo
         }
         target_stmts.extend(block.stmts.iter().cloned());
         cursor += 1;
+    }
+    // The fold merges every consumed block into one assignment, so a try
+    // boundary at any consumed label past the guard would vanish with it.
+    let last_label = blocks[cursor - 1].label;
+    let crosses_try_boundary = regions.iter().any(|(_, region)| {
+        region
+            .iter()
+            .flatten()
+            .any(|&boundary| start_label < boundary && boundary <= last_label)
+    });
+    if crosses_try_boundary {
+        return None;
     }
     strip_final_jump_after(&mut fallthrough_stmts, target);
     strip_final_jump_after(&mut target_stmts, target);
@@ -372,15 +485,20 @@ fn assign_stmt(left: AssignTarget, right: Box<Expr>) -> Stmt {
 
 fn recover_conditional_branch_blocks(
     mut blocks: Vec<StateBlock>,
+    try_regions: &mut [Option<TryRegion>],
+    catch_bindings: &mut CatchBindings,
     opcode_scan: OpcodeReturnScan,
 ) -> Vec<StateBlock> {
     let mut result = Vec::new();
     let mut index = 0usize;
 
     while index < blocks.len() {
-        if let Some((block, consumed)) =
-            try_recover_conditional_branch(&blocks[index..], opcode_scan)
-        {
+        if let Some((block, consumed)) = try_recover_conditional_branch(
+            &blocks[index..],
+            try_regions,
+            catch_bindings,
+            opcode_scan,
+        ) {
             result.push(block);
             index += consumed;
         } else {
@@ -394,8 +512,15 @@ fn recover_conditional_branch_blocks(
     result
 }
 
+/// Recover `if (cond) goto T; <fallthrough>; goto J; T: <target>; J:` as
+/// `if (!cond) { fallthrough } else { target }`. A try region that lies
+/// entirely inside one branch is rebuilt inside that branch. A region that
+/// straddles a branch boundary makes the fold bail out, so the guard opcode
+/// survives and fails the decode closed instead of dropping the region.
 fn try_recover_conditional_branch(
     blocks: &[StateBlock],
+    try_regions: &mut [Option<TryRegion>],
+    catch_bindings: &mut CatchBindings,
     opcode_scan: OpcodeReturnScan,
 ) -> Option<(StateBlock, usize)> {
     let first_block = blocks.first()?;
@@ -408,36 +533,48 @@ fn try_recover_conditional_branch(
     }
 
     let mut cursor = 1usize;
-    let mut fallthrough_stmts = Vec::new();
+    let mut fallthrough_blocks = Vec::new();
     while let Some(block) = blocks.get(cursor) {
         if block.label >= target {
             break;
         }
-        fallthrough_stmts.extend(block.stmts.iter().cloned());
+        fallthrough_blocks.push(block.clone());
         cursor += 1;
     }
-    if fallthrough_stmts.is_empty() {
-        return None;
-    }
 
-    let join_target = pop_final_jump(&mut fallthrough_stmts)?;
+    let join_target = pop_final_block_jump(&mut fallthrough_blocks)?;
     if join_target <= target {
         return None;
     }
 
     let target_start = cursor;
-    let mut target_stmts = Vec::new();
+    let mut target_blocks = Vec::new();
     while let Some(block) = blocks.get(cursor) {
         if block.label >= join_target {
             break;
         }
-        target_stmts.extend(block.stmts.iter().cloned());
+        target_blocks.push(block.clone());
         cursor += 1;
     }
     if cursor == target_start {
         return None;
     }
-    strip_final_jump_to(&mut target_stmts, join_target);
+    strip_final_block_jump_to(&mut target_blocks, join_target);
+
+    let (fallthrough_regions, target_regions) =
+        place_regions_in_branches(try_regions, start_label, target, join_target)?;
+    let fallthrough_stmts = reconstruct_branch_blocks(
+        fallthrough_blocks,
+        start_label..target,
+        &fallthrough_regions,
+        catch_bindings,
+    )?;
+    let target_stmts = reconstruct_branch_blocks(
+        target_blocks,
+        target..join_target,
+        &target_regions,
+        catch_bindings,
+    )?;
 
     if fallthrough_stmts.is_empty() && target_stmts.is_empty() {
         return None;
@@ -447,6 +584,8 @@ fn try_recover_conditional_branch(
     {
         return None;
     }
+    mark_regions_folded(try_regions, &fallthrough_regions);
+    mark_regions_folded(try_regions, &target_regions);
 
     Some((
         StateBlock::new(
@@ -462,10 +601,27 @@ fn try_recover_conditional_branch(
     ))
 }
 
-fn pop_final_jump(stmts: &mut Vec<Stmt>) -> Option<usize> {
-    let target = jump_target_stmt(stmts.last()?)?;
-    stmts.pop();
+/// Pops the jump that ends the last block, returning its target. Empty
+/// trailing blocks are skipped so a block whose only statement was a folded
+/// alias does not hide the jump.
+fn pop_final_block_jump(blocks: &mut [StateBlock]) -> Option<usize> {
+    let last = blocks
+        .iter_mut()
+        .rev()
+        .find(|block| !block.stmts.is_empty())?;
+    let target = jump_target_stmt(last.stmts.last()?)?;
+    last.stmts.pop();
     Some(target)
+}
+
+fn strip_final_block_jump_to(blocks: &mut [StateBlock], target: usize) {
+    if let Some(last) = blocks
+        .iter_mut()
+        .rev()
+        .find(|block| !block.stmts.is_empty())
+    {
+        strip_final_jump_to(&mut last.stmts, target);
+    }
 }
 
 fn strip_final_jump_after(stmts: &mut Vec<Stmt>, target: usize) {
@@ -731,23 +887,33 @@ fn convert_jump_return(
     }
 }
 
-pub(crate) fn reconstruct_with_regions(
-    label_stmts: Vec<Vec<Stmt>>,
-    trys: &[[Option<usize>; 4]],
+/// Flattens the labels in `range`, rebuilding each try region that starts
+/// there as a `try` statement. `regions` carries the try-table index of every
+/// region to rebuild; the index selects the catch binding the decoder already
+/// substituted into the catch body. Labels covered by a region are consumed by
+/// it and emitted nowhere else.
+fn reconstruct_label_range(
+    label_stmts: &[Vec<Stmt>],
+    range: Range<usize>,
+    regions: &[(usize, TryRegion)],
     catch_bindings: &mut CatchBindings,
 ) -> Vec<Stmt> {
-    if trys.is_empty() {
-        return label_stmts.into_iter().flatten().collect();
+    let n = range.end.min(label_stmts.len());
+    if regions.is_empty() {
+        return label_stmts[range.start.min(n)..n]
+            .iter()
+            .flatten()
+            .cloned()
+            .collect();
     }
 
     let mut result: Vec<Stmt> = Vec::new();
-    let n = label_stmts.len();
-    let mut i = 0usize;
+    let mut i = range.start;
 
     while i < n {
-        let region_index = trys.iter().position(|r| r[0] == Some(i));
-        if let Some(region_index) = region_index {
-            let [_try_start, catch_start, finally_start, next] = trys[region_index];
+        let region = regions.iter().find(|(_, region)| region[0] == Some(i));
+        if let Some(&(region_index, region)) = region {
+            let [_try_start, catch_start, finally_start, next] = region;
 
             let try_end = catch_start.or(finally_start).unwrap_or(n);
             let try_stmts: Vec<Stmt> = label_stmts[i..try_end.min(n)]
@@ -826,7 +992,7 @@ pub(crate) fn reconstruct_with_regions(
 
             i = next.unwrap_or(n);
         } else {
-            let in_region = trys.iter().any(|r| {
+            let in_region = regions.iter().any(|(_, r)| {
                 let start = r[0].unwrap_or(usize::MAX);
                 let end = r[3].or(r[2]).or(r[1]).unwrap_or(0);
                 i > start && i < end
@@ -847,7 +1013,8 @@ pub(crate) fn reconstruct_with_regions(
 /// where the body between the jump and target is opcode-free.
 fn resolve_labeled_forward_jump_blocks(
     mut blocks: Vec<StateBlock>,
-    try_regions: &[[Option<usize>; 4]],
+    try_regions: &mut [Option<TryRegion>],
+    catch_bindings: &mut CatchBindings,
     opcode_scan: OpcodeReturnScan,
     join_mode: ForwardJumpJoin,
 ) -> Vec<StateBlock> {
@@ -856,8 +1023,13 @@ fn resolve_labeled_forward_jump_blocks(
     // bounds the number of passes.
     loop {
         let before = blocks.len();
-        blocks =
-            resolve_labeled_forward_jump_blocks_once(blocks, try_regions, opcode_scan, join_mode);
+        blocks = resolve_labeled_forward_jump_blocks_once(
+            blocks,
+            try_regions,
+            catch_bindings,
+            opcode_scan,
+            join_mode,
+        );
         if blocks.len() == before {
             return blocks;
         }
@@ -866,16 +1038,21 @@ fn resolve_labeled_forward_jump_blocks(
 
 fn resolve_labeled_forward_jump_blocks_once(
     mut blocks: Vec<StateBlock>,
-    try_regions: &[[Option<usize>; 4]],
+    try_regions: &mut [Option<TryRegion>],
+    catch_bindings: &mut CatchBindings,
     opcode_scan: OpcodeReturnScan,
     join_mode: ForwardJumpJoin,
 ) -> Vec<StateBlock> {
     let mut result = Vec::new();
     let mut index = 0;
     while index < blocks.len() {
-        if let Some((recovered, consumed)) =
-            try_resolve_labeled_forward_jump(&blocks[index..], try_regions, opcode_scan, join_mode)
-        {
+        if let Some((recovered, consumed)) = try_resolve_labeled_forward_jump(
+            &blocks[index..],
+            try_regions,
+            catch_bindings,
+            opcode_scan,
+            join_mode,
+        ) {
             result.push(recovered);
             index += consumed;
         } else {
@@ -890,13 +1067,16 @@ fn resolve_labeled_forward_jump_blocks_once(
 
 /// Recover `if (cond) goto T; <body>` as `if (!cond) { body }` where the body
 /// is every following block below label T. T may be a mid-machine join with
-/// its own statements; those stay in place as the continuation. Any jump left
-/// inside the body (including into it from elsewhere, which leaves that jump
-/// opcode unresolved) fails the decode closed via the caller's final opcode
-/// scan instead of producing wrong control flow.
+/// its own statements; those stay in place as the continuation. A try region
+/// that lies entirely inside the body is rebuilt there; one that straddles the
+/// guard or the join makes the fold bail out. Any jump left inside the body
+/// (including into it from elsewhere, which leaves that jump opcode
+/// unresolved) fails the decode closed via the caller's final opcode scan
+/// instead of producing wrong control flow.
 fn try_resolve_labeled_forward_jump(
     blocks: &[StateBlock],
-    try_regions: &[[Option<usize>; 4]],
+    try_regions: &mut [Option<TryRegion>],
+    catch_bindings: &mut CatchBindings,
     opcode_scan: OpcodeReturnScan,
     join_mode: ForwardJumpJoin,
 ) -> Option<(StateBlock, usize)> {
@@ -921,31 +1101,44 @@ fn try_resolve_labeled_forward_jump(
         }
     }
 
-    // Folded body statements move to `start_label`. If a try-region boundary
-    // lies between the guard and the join, that move would silently pull
-    // statements across the reconstructed try/catch/finally edges.
-    let crosses_try_boundary = try_regions.iter().any(|region| {
-        region
-            .iter()
-            .flatten()
-            .any(|&boundary| start_label < boundary && boundary < target)
-    });
-    if crosses_try_boundary {
+    // A guard that jumps to a block which immediately loops back skips the
+    // rest of a loop body: that is a `continue`, which index-loop recovery
+    // restores from the jump. Wrapping the body in an `if` instead would be
+    // equivalent but hide the original control flow.
+    let target_loops_back = blocks
+        .iter()
+        .rev()
+        .find(|block| block.label == target)
+        .is_some_and(|block| {
+            matches!(block.terminator(), StateTerminator::Jump { target: back } if back < target)
+        });
+    if target_loops_back {
         return None;
     }
 
     let mut cursor = 1usize;
-    let mut body_stmts = Vec::new();
+    let mut body_blocks = Vec::new();
     while let Some(block) = blocks.get(cursor) {
         if block.label >= target {
             break;
         }
-        body_stmts.extend(block.stmts.iter().cloned());
+        body_blocks.push(block.clone());
         cursor += 1;
     }
+    // Folded body statements move to `start_label`. A try region that only
+    // partly overlaps the body would have statements pulled across its
+    // try/catch/finally edges; one contained in the body is rebuilt inside it.
+    let (body_regions, _) = place_regions_in_branches(try_regions, start_label, target, target)?;
+    let body_stmts = reconstruct_branch_blocks(
+        body_blocks,
+        start_label..target,
+        &body_regions,
+        catch_bindings,
+    )?;
     if body_stmts.is_empty() || stmts_contain_state_opcode_return(&body_stmts, opcode_scan) {
         return None;
     }
+    mark_regions_folded(try_regions, &body_regions);
 
     let mut stmts = first_block.stmts.clone();
     stmts.pop();
@@ -985,18 +1178,31 @@ pub(crate) fn stmts_contain_state_opcode_return(
         }
 
         fn visit_return_stmt(&mut self, ret: &swc_core::ecma::ast::ReturnStmt) {
-            if let Some(Expr::Array(arr)) = ret.arg.as_deref() {
-                if arr
-                    .elems
-                    .first()
-                    .and_then(|e| e.as_ref())
-                    .is_some_and(|e| matches!(e.expr.as_ref(), Expr::Lit(Lit::Num(_))))
-                {
-                    self.found = true;
-                    return;
-                }
+            if ret.arg.as_deref().is_some_and(returns_opcode_array) {
+                self.found = true;
+                return;
             }
             ret.visit_children_with(self);
+        }
+    }
+
+    /// Whether a return value is an opcode array once the wrappers a minifier
+    /// leaves around it are peeled: parentheses, a trailing sequence element, or
+    /// either branch of a conditional.
+    fn returns_opcode_array(expr: &Expr) -> bool {
+        match expr {
+            Expr::Paren(paren) => returns_opcode_array(&paren.expr),
+            Expr::Seq(seq) => seq
+                .exprs
+                .last()
+                .is_some_and(|last| returns_opcode_array(last)),
+            Expr::Cond(cond) => returns_opcode_array(&cond.cons) || returns_opcode_array(&cond.alt),
+            Expr::Array(arr) => arr
+                .elems
+                .first()
+                .and_then(|e| e.as_ref())
+                .is_some_and(|e| matches!(e.expr.as_ref(), Expr::Lit(Lit::Num(_)))),
+            _ => false,
         }
     }
     let mut finder = Finder {
@@ -1146,6 +1352,132 @@ mod tests {
     }
 
     #[test]
+    fn program_rebuilds_try_region_inside_recovered_else_branch() {
+        // if (take_try) goto 1; else_work; goto 4;
+        // 1: try_work  3: handle  4:          with region [1, 3, , 4]
+        let recovered = with_globals(|| {
+            StateMachineProgram::from_labeled_stmts(
+                vec![
+                    (0, if_jump("take_try", 1)),
+                    (0, expr_ident_stmt("else_work")),
+                    (0, jump_return(4)),
+                    (1, expr_ident_stmt("try_work")),
+                    (3, expr_ident_stmt("handle")),
+                ],
+                vec![[Some(1), Some(3), None, Some(4)]],
+            )
+            .recover_conditional_branches(OpcodeReturnScan::SkipNestedFunctions)
+            .into_reconstructed_stmts()
+        });
+
+        assert_eq!(recovered.len(), 1, "{recovered:#?}");
+        let Stmt::If(if_stmt) = &recovered[0] else {
+            panic!("expected recovered if statement");
+        };
+        let Some(alt) = &if_stmt.alt else {
+            panic!("expected else block");
+        };
+        let Stmt::Block(alt) = alt.as_ref() else {
+            panic!("expected else block");
+        };
+        assert_eq!(alt.stmts.len(), 1);
+        let Stmt::Try(try_stmt) = &alt.stmts[0] else {
+            panic!("expected try inside the else branch, got {:#?}", alt.stmts);
+        };
+        assert_eq!(try_stmt.block.stmts.len(), 1);
+        assert!(try_stmt.handler.is_some());
+        assert!(!stmts_contain_state_opcode_return(
+            &recovered,
+            OpcodeReturnScan::SkipNestedFunctions
+        ));
+    }
+
+    #[test]
+    fn program_rebuilds_try_region_inside_forward_jump_body() {
+        // if (skip) goto 4;  1: try_work  3: handle  4:   with region [1, 3, , 4]
+        let recovered = with_globals(|| {
+            StateMachineProgram::from_labeled_stmts(
+                vec![
+                    (0, if_jump("skip", 4)),
+                    (1, expr_ident_stmt("try_work")),
+                    (3, expr_ident_stmt("handle")),
+                ],
+                vec![[Some(1), Some(3), None, Some(4)]],
+            )
+            .resolve_labeled_forward_jumps(
+                OpcodeReturnScan::SkipNestedFunctions,
+                ForwardJumpJoin::MidMachine,
+            )
+            .into_reconstructed_stmts()
+        });
+
+        assert_eq!(recovered.len(), 1, "{recovered:#?}");
+        let Stmt::If(if_stmt) = &recovered[0] else {
+            panic!("expected recovered if statement");
+        };
+        assert!(if_stmt.alt.is_none());
+        let Stmt::Block(cons) = if_stmt.cons.as_ref() else {
+            panic!("expected if body block");
+        };
+        assert_eq!(cons.stmts.len(), 1);
+        assert!(
+            matches!(cons.stmts[0], Stmt::Try(_)),
+            "expected try inside the if body, got {:#?}",
+            cons.stmts
+        );
+    }
+
+    #[test]
+    fn program_keeps_guard_when_try_region_straddles_branch_join() {
+        // The region's `next` label (5) lies past the branch join (4), so the
+        // target branch would cut the region in half. The fold must bail out
+        // and leave the guard opcode for the caller's fail-closed scan.
+        let recovered = with_globals(|| {
+            StateMachineProgram::from_labeled_stmts(
+                vec![
+                    (0, if_jump("take_try", 1)),
+                    (0, expr_ident_stmt("else_work")),
+                    (0, jump_return(4)),
+                    (1, expr_ident_stmt("try_work")),
+                    (3, expr_ident_stmt("handle")),
+                    (4, expr_ident_stmt("after")),
+                ],
+                vec![[Some(1), Some(3), None, Some(5)]],
+            )
+            .recover_conditional_branches(OpcodeReturnScan::SkipNestedFunctions)
+            .into_reconstructed_stmts()
+        });
+
+        assert!(stmts_contain_state_opcode_return(
+            &recovered,
+            OpcodeReturnScan::SkipNestedFunctions
+        ));
+    }
+
+    #[test]
+    fn program_keeps_conditional_assignment_apart_from_try_region() {
+        // The target assignment starts a try region; folding it into a
+        // conditional expression would drop the region.
+        let recovered = with_globals(|| {
+            StateMachineProgram::from_labeled_stmts(
+                vec![
+                    (0, if_jump("done", 2)),
+                    (1, ident_assign_stmt("value", "fallback")),
+                    (2, ident_assign_stmt("value", "target")),
+                ],
+                vec![[Some(2), Some(3), None, Some(4)]],
+            )
+            .recover_conditional_assignments()
+            .into_reconstructed_stmts()
+        });
+
+        assert!(stmts_contain_state_opcode_return(
+            &recovered,
+            OpcodeReturnScan::SkipNestedFunctions
+        ));
+    }
+
+    #[test]
     fn program_recovers_adjacent_back_edge_index_loop() {
         let recovered = StateMachineProgram::from_labeled_stmts(
             vec![
@@ -1189,6 +1521,11 @@ mod tests {
             panic!("expected conditional continue guard");
         };
         assert!(matches!(if_stmt.cons.as_ref(), Stmt::Continue(_)));
+    }
+
+    /// Catch clauses mint a fresh binding context, which needs SWC's globals.
+    fn with_globals<T>(f: impl FnOnce() -> T) -> T {
+        swc_core::common::GLOBALS.set(&Default::default(), f)
     }
 
     fn if_jump(test: &str, target: usize) -> Stmt {

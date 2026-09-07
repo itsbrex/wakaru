@@ -2880,3 +2880,148 @@ function* fetch_items(source, error) {
 "#;
     assert_eq_normalized(&apply(input), expected);
 }
+
+// ── try regions entered through a conditional jump ──────────────────────────
+
+#[test]
+fn guarded_try_catch_stays_inside_its_branch() {
+    // TypeScript ES5 output for `if (loader.lazy) { try { await ... } catch
+    // (error) { ... } } else { ... }`. The try region starts at label 1, which
+    // is reached only by falling through the guard in label 0. Folding the
+    // branches must keep the try/catch inside the guarded branch; dropping it
+    // runs the catch body unconditionally after the await.
+    let input = r#"
+function load_resource(loader, path, options) {
+  return __awaiter(this, void 0, void 0, function () {
+    var error_1;
+    return __generator(this, function (_a) {
+      switch (_a.label) {
+        case 0:
+          if (!loader.lazy) return [3 /*break*/, 5];
+          _a.label = 1;
+        case 1:
+          _a.trys.push([1, 3, , 4]);
+          return [4 /*yield*/, loader.load(path, options)];
+        case 2:
+          _a.sent();
+          return [3 /*break*/, 4];
+        case 3:
+          error_1 = _a.sent();
+          report_error(error_1);
+          return [3 /*break*/, 4];
+        case 4: return [3 /*break*/, 6];
+        case 5:
+          loader.load(path, options).catch(report_error);
+          _a.label = 6;
+        case 6: return [2 /*return*/];
+      }
+    });
+  });
+}
+"#;
+    let expected = r#"
+async function load_resource(loader, path, options) {
+  var error_1;
+  if (loader.lazy) {
+    try {
+      await loader.load(path, options);
+    } catch (error) {
+      report_error(error);
+    }
+  } else {
+    loader.load(path, options).catch(report_error);
+  }
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+    let findings = validate_output_modules(&[("input.js".to_string(), output)]);
+    assert!(findings.is_empty(), "{findings:#?}");
+}
+
+#[test]
+fn guarded_try_catch_in_terser_conditional_return_stays_inside_its_branch() {
+    // Terser folds the guard and the else branch into one conditional return:
+    // `return e.type ? [3, 1] : (else_work, [3, 4])`. The try region at labels
+    // 1-3 is the taken branch of that conditional.
+    let input = r#"
+function load(e, t, n) {
+  return __awaiter(this, void 0, void 0, function () {
+    var i;
+    return __generator(this, function (s) {
+      switch (s.label) {
+        case 0: return e.type ? [3, 1] : (e.load(t, n).catch(handle), [3, 4]);
+        case 1: s.trys.push([1, 3, , 4]); return [4, e.load(t, n)];
+        case 2: s.sent(); return [3, 4];
+        case 3: i = s.sent(); handle(i); return [3, 4];
+        case 4: return [2];
+      }
+    });
+  });
+}
+"#;
+    let expected = r#"
+async function load(e, t, n) {
+  var i;
+  if (!e.type) {
+    e.load(t, n).catch(handle);
+  } else {
+    try {
+      await e.load(t, n);
+    } catch (error) {
+      handle(error);
+    }
+  }
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+    let findings = validate_output_modules(&[("input.js".to_string(), output)]);
+    assert!(findings.is_empty(), "{findings:#?}");
+}
+
+#[test]
+fn guarded_try_catch_without_else_is_recovered() {
+    // Same region, but the guard jumps straight to the end of the machine.
+    let input = r#"
+function load_resource(loader, path, options) {
+  return __awaiter(this, void 0, void 0, function () {
+    var error_1;
+    return __generator(this, function (_a) {
+      switch (_a.label) {
+        case 0:
+          if (!loader.lazy) return [3 /*break*/, 4];
+          _a.label = 1;
+        case 1:
+          _a.trys.push([1, 3, , 4]);
+          return [4 /*yield*/, loader.load(path, options)];
+        case 2:
+          _a.sent();
+          return [3 /*break*/, 4];
+        case 3:
+          error_1 = _a.sent();
+          report_error(error_1);
+          return [3 /*break*/, 4];
+        case 4: return [2 /*return*/];
+      }
+    });
+  });
+}
+"#;
+    let expected = r#"
+async function load_resource(loader, path, options) {
+  var error_1;
+  if (loader.lazy) {
+    try {
+      await loader.load(path, options);
+    } catch (error) {
+      report_error(error);
+    }
+  }
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+    let findings = validate_output_modules(&[("input.js".to_string(), output)]);
+    assert!(findings.is_empty(), "{findings:#?}");
+}

@@ -896,7 +896,28 @@ fn expand_one_stmt(result: &mut Vec<Stmt>, stmt: &Stmt) {
             let Expr::Cond(cond) = ret.arg.as_ref().unwrap().as_ref() else {
                 unreachable!()
             };
-            if is_opcode_like(&cond.cons) || is_opcode_like(&cond.alt) {
+            let alt_is_sequence = matches!(strip_parens(&cond.alt), Expr::Seq(_));
+            if alt_is_sequence && is_plain_opcode(&cond.cons) {
+                // `return test ? [3, N] : (work, [3, M])`: the guard keeps the
+                // plain opcode and the sequence expands into statements, so
+                // the goto in the sequence stays visible to the block walk.
+                result.push(Stmt::If(IfStmt {
+                    span: ret.span,
+                    test: cond.test.clone(),
+                    cons: Box::new(Stmt::Return(ReturnStmt {
+                        span: ret.span,
+                        arg: Some(cond.cons.clone()),
+                    })),
+                    alt: None,
+                }));
+                expand_one_stmt(
+                    result,
+                    &Stmt::Return(ReturnStmt {
+                        span: ret.span,
+                        arg: Some(cond.alt.clone()),
+                    }),
+                );
+            } else if is_opcode_like(&cond.cons) || is_opcode_like(&cond.alt) {
                 result.push(Stmt::If(IfStmt {
                     span: ret.span,
                     test: invert_condition(&cond.test),
@@ -919,6 +940,11 @@ fn expand_one_stmt(result: &mut Vec<Stmt>, stmt: &Stmt) {
         }
         _ => result.push(stmt.clone()),
     }
+}
+
+/// An opcode array that is not wrapped in a sequence: `[3, N]`, not `(a, [3, N])`.
+fn is_plain_opcode(expr: &Expr) -> bool {
+    !matches!(strip_parens(expr), Expr::Seq(_)) && is_opcode_like(expr)
 }
 
 fn is_opcode_like(expr: &Expr) -> bool {

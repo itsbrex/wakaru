@@ -3207,3 +3207,285 @@ function g(error) {
         "caught value should use the fresh name, got:\n{output}"
     );
 }
+
+// ── try regions entered through a conditional jump ──────────────────────────
+
+#[test]
+fn guarded_try_catch_stays_inside_its_branch() {
+    // regenerator output for `if (loader.lazy) { try { yield ... } catch
+    // (error) { ... } } else { ... }`. The try entry `_context.prev = 1` sits
+    // in the middle of case 0 because nothing jumps to label 1; the region
+    // must still be rebuilt inside the guarded branch instead of being
+    // dropped, which would run the catch body after every yield.
+    let input = r#"
+var _marked = regeneratorRuntime.mark(load_resource);
+function load_resource(loader, path, options) {
+  return regeneratorRuntime.wrap(function load_resource$(_context) {
+    while (1) switch (_context.prev = _context.next) {
+      case 0:
+        if (!loader.lazy) {
+          _context.next = 11;
+          break;
+        }
+        _context.prev = 1;
+        _context.next = 4;
+        return loader.load(path, options);
+      case 4:
+        _context.next = 9;
+        break;
+      case 6:
+        _context.prev = 6;
+        _context.t0 = _context["catch"](1);
+        report_error(_context.t0);
+      case 9:
+        _context.next = 12;
+        break;
+      case 11:
+        loader.load(path, options).catch(report_error);
+      case 12:
+      case "end":
+        return _context.stop();
+    }
+  }, _marked, null, [[1, 6]]);
+}
+"#;
+    let expected = r#"
+function* load_resource(loader, path, options) {
+  if (loader.lazy) {
+    try {
+      yield loader.load(path, options);
+    } catch (error) {
+      report_error(error);
+    }
+  } else {
+    loader.load(path, options).catch(report_error);
+  }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn guarded_try_catch_without_else_is_recovered() {
+    let input = r#"
+var _marked = regeneratorRuntime.mark(load_resource);
+function load_resource(loader, path, options) {
+  return regeneratorRuntime.wrap(function load_resource$(_context) {
+    while (1) switch (_context.prev = _context.next) {
+      case 0:
+        if (!loader.lazy) {
+          _context.next = 9;
+          break;
+        }
+        _context.prev = 1;
+        _context.next = 4;
+        return loader.load(path, options);
+      case 4:
+        _context.next = 9;
+        break;
+      case 6:
+        _context.prev = 6;
+        _context.t0 = _context["catch"](1);
+        report_error(_context.t0);
+      case 9:
+      case "end":
+        return _context.stop();
+    }
+  }, _marked, null, [[1, 6]]);
+}
+"#;
+    let expected = r#"
+function* load_resource(loader, path, options) {
+  if (loader.lazy) {
+    try {
+      yield loader.load(path, options);
+    } catch (error) {
+      report_error(error);
+    }
+  }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn guarded_try_catch_stays_inside_its_branch_in_new_runtime() {
+    // Babel 7.28+ `_regenerator().w` shape of the same source: `_context.p = 1`
+    // marks the try entry mid-case, the caught value arrives in `_context.v`.
+    let input = r#"
+var _marked = _regenerator().m(load_resource);
+function load_resource(loader, path, options) {
+  var _t;
+  return _regenerator().w(function (_context) {
+    while (1) switch (_context.p = _context.n) {
+      case 0:
+        if (!loader.lazy) {
+          _context.n = 5;
+          break;
+        }
+        _context.p = 1;
+        _context.n = 2;
+        return loader.load(path, options);
+      case 2:
+        _context.n = 4;
+        break;
+      case 3:
+        _context.p = 3;
+        _t = _context.v;
+        report_error(_t);
+      case 4:
+        _context.n = 6;
+        break;
+      case 5:
+        loader.load(path, options).catch(report_error);
+      case 6:
+        return _context.a(2);
+    }
+  }, _marked, null, [[1, 3]]);
+}
+"#;
+    let expected = r#"
+function* load_resource(loader, path, options) {
+  var _t;
+  if (loader.lazy) {
+    try {
+      yield loader.load(path, options);
+    } catch (error) {
+      report_error(error);
+    }
+  } else {
+    loader.load(path, options).catch(report_error);
+  }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn guarded_try_catch_without_else_is_recovered_in_new_runtime() {
+    let input = r#"
+var _marked = _regenerator().m(load_resource);
+function load_resource(loader, path, options) {
+  var _t;
+  return _regenerator().w(function (_context) {
+    while (1) switch (_context.p = _context.n) {
+      case 0:
+        if (!loader.lazy) {
+          _context.n = 4;
+          break;
+        }
+        _context.p = 1;
+        _context.n = 2;
+        return loader.load(path, options);
+      case 2:
+        _context.n = 4;
+        break;
+      case 3:
+        _context.p = 3;
+        _t = _context.v;
+        report_error(_t);
+      case 4:
+        return _context.a(2);
+    }
+  }, _marked, null, [[1, 3]]);
+}
+"#;
+    let expected = r#"
+function* load_resource(loader, path, options) {
+  var _t;
+  if (loader.lazy) {
+    try {
+      yield loader.load(path, options);
+    } catch (error) {
+      report_error(error);
+    }
+  }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn try_entry_after_statement_keeps_yield_inside_try() {
+    // `started = start_timer(); try { yield ... } catch ...`: regenerator
+    // numbers the try entry (`_context.prev = 1`) after the first statement
+    // without starting a new case, so the yield belongs to label 1, inside
+    // the region, not to case 0.
+    let input = r#"
+var _marked = regeneratorRuntime.mark(load_resource);
+function load_resource(loader, path) {
+  var started;
+  return regeneratorRuntime.wrap(function load_resource$(_context) {
+    while (1) switch (_context.prev = _context.next) {
+      case 0:
+        started = start_timer();
+        _context.prev = 1;
+        _context.next = 4;
+        return loader.load(path);
+      case 4:
+        _context.next = 9;
+        break;
+      case 6:
+        _context.prev = 6;
+        _context.t0 = _context["catch"](1);
+        report_error(_context.t0, started);
+      case 9:
+      case "end":
+        return _context.stop();
+    }
+  }, _marked, null, [[1, 6]]);
+}
+"#;
+    let expected = r#"
+function* load_resource(loader, path) {
+  var started;
+  started = start_timer();
+  try {
+    yield loader.load(path);
+  } catch (error) {
+    report_error(error, started);
+  }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn try_entry_after_statement_keeps_yield_inside_try_in_new_runtime() {
+    let input = r#"
+var _marked = _regenerator().m(load_resource);
+function load_resource(loader, path) {
+  var started, _t;
+  return _regenerator().w(function (_context) {
+    while (1) switch (_context.p = _context.n) {
+      case 0:
+        started = start_timer();
+        _context.p = 1;
+        _context.n = 2;
+        return loader.load(path);
+      case 2:
+        _context.n = 4;
+        break;
+      case 3:
+        _context.p = 3;
+        _t = _context.v;
+        report_error(_t, started);
+      case 4:
+        return _context.a(2);
+    }
+  }, _marked, null, [[1, 3]]);
+}
+"#;
+    let expected = r#"
+function* load_resource(loader, path) {
+  var started, _t;
+  started = start_timer();
+  try {
+    yield loader.load(path);
+  } catch (error) {
+    report_error(error, started);
+  }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
