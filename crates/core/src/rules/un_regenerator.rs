@@ -4,16 +4,17 @@ use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Span, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayLit, ArrowExpr, ArrowFunctionBody, AssignExpr, AssignOp, AssignTarget, AwaitExpr,
-    BlockStmt, CallExpr, Callee, Decl, Expr, ExprOrSpread, ExprStmt, FnDecl, FnExpr, Function,
-    FunctionBody, Ident, ImportSpecifier, Lit, MemberExpr, MemberProp, Module, ModuleDecl,
-    ModuleItem, Number, ObjectLit, Param, ParenExpr, Pat, Prop, PropName, PropOrSpread, ReturnStmt,
-    SimpleAssignTarget, Stmt, SwitchCase, VarDeclarator, WhileStmt, YieldExpr,
+    BindingIdent, BlockStmt, CallExpr, Callee, Decl, Expr, ExprOrSpread, ExprStmt, FnDecl, FnExpr,
+    Function, FunctionBody, Ident, ImportSpecifier, Lit, MemberExpr, MemberProp, Module,
+    ModuleDecl, ModuleItem, Number, ObjectLit, Param, ParenExpr, Pat, Prop, PropName, PropOrSpread,
+    ReturnStmt, SimpleAssignTarget, Stmt, SwitchCase, VarDecl, VarDeclKind, VarDeclarator,
+    WhileStmt, YieldExpr,
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
 use crate::facts::{HelperKind, ModuleFactsMap};
 
-use super::decl_utils::collect_pat_names;
+use super::decl_utils::{collect_pat_names, fresh_binding_ident};
 use super::eval_utils::module_has_with_stmt;
 use super::helper_matcher::{
     binding_key, count_binding_refs, member_prop_name, remove_fn_decls_by_binding,
@@ -1036,7 +1037,8 @@ fn try_transform_regenerator_wrap_with_reserved(
     let mark_name = extract_wrap_mark_key(&body.stmts[return_idx]);
 
     let ret_stmt = body.stmts[return_idx].clone();
-    let (state_name, cases, try_regions, hoisted_locals) = extract_wrap_args(ret_stmt)?;
+    let (state_param, cases, try_regions, hoisted_locals) = extract_wrap_args(ret_stmt)?;
+    let state_name = state_param.sym.clone();
 
     let mut name_collector = IdentifierNameCollector::default();
     for (idx, stmt) in body.stmts.iter().enumerate() {
@@ -1064,6 +1066,19 @@ fn try_transform_regenerator_wrap_with_reserved(
 
     let mut new_stmts = hoisted_locals;
     new_stmts.extend(decode_babel_state_machine(&state_name, cases, try_regions));
+    // Values that must survive a yield are parked in `_ctx.tN` slots. The
+    // state callback and its parameter are gone once the machine is decoded,
+    // so each slot becomes a local of the recovered function. Any other
+    // surviving reference to the state parameter has no object to reach;
+    // leave the function un-recovered rather than emit it.
+    let mut used_names = outer_names.clone();
+    used_names.extend(local_names.iter().cloned());
+    let mut body_names = IdentifierNameCollector::default();
+    new_stmts.visit_with(&mut body_names);
+    used_names.extend(body_names.names);
+    if !lower_state_temp_slots(&state_param, &mut new_stmts, &mut used_names) {
+        return None;
+    }
     // Safety net: if a forward conditional jump could not be structured, an
     // opcode goto (`return [3, N]`) leaks into the output. Rather than emit
     // broken control flow, leave the function un-recovered.
@@ -1073,6 +1088,158 @@ fn try_transform_regenerator_wrap_with_reserved(
     body.stmts.remove(return_idx);
     body.stmts.splice(return_idx..return_idx, new_stmts);
     Some(mark_name)
+}
+
+/// Turn every `state.tN` slot in the decoded statements into a fresh local
+/// declared with `var` at the front of `stmts`. Returns `false` when a
+/// reference to the state parameter other than a slot survives.
+fn lower_state_temp_slots(
+    state_param: &Ident,
+    stmts: &mut Vec<Stmt>,
+    used_names: &mut HashSet<Atom>,
+) -> bool {
+    struct SlotCollector<'a> {
+        state_param: &'a Ident,
+        slots: Vec<Atom>,
+        other_state_reference: bool,
+    }
+
+    impl Visit for SlotCollector<'_> {
+        fn visit_member_expr(&mut self, member: &MemberExpr) {
+            if is_state_param_ref(&member.obj, self.state_param) {
+                match &member.prop {
+                    MemberProp::Ident(prop) if is_state_temp_slot_name(&prop.sym) => {
+                        if !self.slots.contains(&prop.sym) {
+                            self.slots.push(prop.sym.clone());
+                        }
+                    }
+                    MemberProp::Computed(computed) => {
+                        self.other_state_reference = true;
+                        computed.visit_with(self);
+                    }
+                    _ => self.other_state_reference = true,
+                }
+                return;
+            }
+            member.visit_children_with(self);
+        }
+
+        fn visit_ident(&mut self, ident: &Ident) {
+            if ident.sym == self.state_param.sym && ident.ctxt == self.state_param.ctxt {
+                self.other_state_reference = true;
+            }
+        }
+    }
+
+    let mut collector = SlotCollector {
+        state_param,
+        slots: Vec::new(),
+        other_state_reference: false,
+    };
+    stmts.visit_with(&mut collector);
+    if collector.other_state_reference {
+        return false;
+    }
+    if collector.slots.is_empty() {
+        return true;
+    }
+
+    let locals: HashMap<Atom, Ident> = collector
+        .slots
+        .iter()
+        .map(|slot| {
+            let mut candidate = slot.clone();
+            let mut counter = 1usize;
+            while used_names.contains(&candidate) {
+                candidate = Atom::from(format!("{slot}_{counter}"));
+                counter += 1;
+            }
+            used_names.insert(candidate.clone());
+            (slot.clone(), fresh_binding_ident(candidate, DUMMY_SP))
+        })
+        .collect();
+
+    struct SlotRewriter<'a> {
+        state_param: &'a Ident,
+        locals: &'a HashMap<Atom, Ident>,
+    }
+
+    impl SlotRewriter<'_> {
+        fn local_for(&self, member: &MemberExpr) -> Option<&Ident> {
+            if !is_state_param_ref(&member.obj, self.state_param) {
+                return None;
+            }
+            let MemberProp::Ident(prop) = &member.prop else {
+                return None;
+            };
+            self.locals.get(&prop.sym)
+        }
+    }
+
+    impl VisitMut for SlotRewriter<'_> {
+        fn visit_mut_expr(&mut self, expr: &mut Expr) {
+            expr.visit_mut_children_with(self);
+            if let Expr::Member(member) = expr {
+                if let Some(local) = self.local_for(member) {
+                    *expr = Expr::Ident(local.clone());
+                }
+            }
+        }
+
+        fn visit_mut_simple_assign_target(&mut self, target: &mut SimpleAssignTarget) {
+            target.visit_mut_children_with(self);
+            if let SimpleAssignTarget::Member(member) = target {
+                if let Some(local) = self.local_for(member) {
+                    *target = SimpleAssignTarget::Ident(BindingIdent {
+                        id: local.clone(),
+                        type_ann: None,
+                    });
+                }
+            }
+        }
+    }
+
+    stmts.visit_mut_with(&mut SlotRewriter {
+        state_param,
+        locals: &locals,
+    });
+
+    let decls = collector
+        .slots
+        .iter()
+        .map(|slot| VarDeclarator {
+            span: DUMMY_SP,
+            name: Pat::Ident(BindingIdent {
+                id: locals[slot].clone(),
+                type_ann: None,
+            }),
+            init: None,
+            definite: false,
+        })
+        .collect();
+    stmts.insert(
+        0,
+        Stmt::Decl(Decl::Var(Box::new(VarDecl {
+            span: DUMMY_SP,
+            ctxt: Default::default(),
+            kind: VarDeclKind::Var,
+            declare: false,
+            decls,
+        }))),
+    );
+    true
+}
+
+/// The state callback's parameter by resolver identity: a nested generator
+/// whose state parameter shares the minified name is a different binding.
+fn is_state_param_ref(expr: &Expr, state_param: &Ident) -> bool {
+    matches!(expr, Expr::Ident(id) if id.sym == state_param.sym && id.ctxt == state_param.ctxt)
+}
+
+/// Regenerator temp slots are spelled `t0`, `t1`, ...
+fn is_state_temp_slot_name(name: &Atom) -> bool {
+    let rest = name.strip_prefix('t').unwrap_or("");
+    !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn binding_names_from_params(params: &[Param]) -> HashSet<Atom> {
@@ -1583,7 +1750,7 @@ fn is_state_switch_discriminant(expr: &Expr, param_name: &Atom) -> bool {
 
 fn extract_wrap_args(
     stmt: Stmt,
-) -> Option<(Atom, Vec<SwitchCase>, Vec<[Option<usize>; 4]>, Vec<Stmt>)> {
+) -> Option<(Ident, Vec<SwitchCase>, Vec<[Option<usize>; 4]>, Vec<Stmt>)> {
     let Stmt::Return(ret) = stmt else { return None };
     let arg = *ret.arg?;
     let Expr::Call(call) = arg else { return None };
@@ -1603,8 +1770,8 @@ fn extract_wrap_args(
 
     let try_regions = extract_wrap_try_regions_from_call(&call);
     let fn_arg = *call.args.into_iter().next()?.expr;
-    let (state_name, cases, hoisted_locals) = extract_state_machine_parts(fn_arg)?;
-    Some((state_name, cases, try_regions, hoisted_locals))
+    let (state_param, cases, hoisted_locals) = extract_state_machine_parts(fn_arg)?;
+    Some((state_param, cases, try_regions, hoisted_locals))
 }
 
 fn extract_wrap_try_regions_from_call(
@@ -1645,11 +1812,11 @@ fn parse_try_region_array(arr: &ArrayLit) -> Option<[Option<usize>; 4]> {
     Some(region)
 }
 
-fn extract_state_machine_parts(expr: Expr) -> Option<(Atom, Vec<SwitchCase>, Vec<Stmt>)> {
+fn extract_state_machine_parts(expr: Expr) -> Option<(Ident, Vec<SwitchCase>, Vec<Stmt>)> {
     match expr {
         Expr::Fn(fn_expr) => {
             let param_name = match &fn_expr.function.params.first()?.pat {
-                Pat::Ident(bi) => bi.id.sym.clone(),
+                Pat::Ident(bi) => bi.id.clone(),
                 _ => return None,
             };
             let body = fn_expr.function.body?;
@@ -1658,7 +1825,7 @@ fn extract_state_machine_parts(expr: Expr) -> Option<(Atom, Vec<SwitchCase>, Vec
         }
         Expr::Arrow(arrow) => {
             let param_name = match &arrow.params.first()? {
-                Pat::Ident(bi) => bi.id.sym.clone(),
+                Pat::Ident(bi) => bi.id.clone(),
                 _ => return None,
             };
             let body = match *arrow.body {

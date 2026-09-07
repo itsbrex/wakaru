@@ -3489,3 +3489,57 @@ function* load_resource(loader, path) {
 "#;
     assert_eq_normalized(&apply(input), expected);
 }
+
+#[test]
+fn context_temp_slots_become_locals() {
+    // Babel parks a value that must survive a yield in `_context.tN`. Once the
+    // state callback is gone those slots have no object to live on; each one
+    // becomes a local of the recovered function.
+    let input = r#"
+function fetch_json() {
+  return _fetch_json.apply(this, arguments);
+}
+function _fetch_json() {
+  _fetch_json = _asyncToGenerator(regeneratorRuntime.mark(function _callee(url) {
+    var response, payload;
+    return regeneratorRuntime.wrap(function _callee$(_context) {
+      while (1) switch (_context.prev = _context.next) {
+        case 0:
+          _context.next = 2;
+          return fetch(url);
+        case 2:
+          response = _context.sent;
+          if (!is_json(response)) {
+            _context.next = 9;
+            break;
+          }
+          _context.next = 6;
+          return response.json();
+        case 6:
+          _context.t0 = _context.sent;
+          _context.next = 12;
+          break;
+        case 9:
+          _context.next = 11;
+          return response.text();
+        case 11:
+          _context.t0 = _context.sent;
+        case 12:
+          payload = _context.t0;
+          return _context.abrupt("return", { data: payload });
+        case 14:
+        case "end":
+          return _context.stop();
+      }
+    }, _callee);
+  }));
+  return _fetch_json.apply(this, arguments);
+}
+"#;
+    let output = render(input);
+    assert!(!output.contains("_context"), "{output}");
+    assert!(output.contains("let t0;"), "{output}");
+    assert!(output.contains("t0 = yield response.json();"), "{output}");
+    assert!(output.contains("t0 = yield response.text();"), "{output}");
+    assert!(output.contains("payload = t0;"), "{output}");
+}
