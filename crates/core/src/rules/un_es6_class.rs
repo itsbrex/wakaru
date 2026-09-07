@@ -12,7 +12,8 @@ use swc_core::ecma::ast::{
     Constructor, Decl, ExportDecl, Expr, ExprOrSpread, ExprStmt, FnExpr, Function, FunctionBody,
     Ident, IdentName, ImportSpecifier, Lit, MemberExpr, MemberProp, MethodKind, ModuleDecl,
     ModuleExportName, ModuleItem, Param, ParamOrTsParamProp, Pat, PropName, SeqExpr,
-    SimpleAssignTarget, Stmt, Super, SuperProp, SuperPropExpr, VarDecl,
+    SimpleAssignTarget, Stmt, Super, SuperProp, SuperPropExpr, ThisExpr, VarDecl, VarDeclKind,
+    VarDeclarator,
 };
 use swc_core::ecma::utils::find_pat_ids;
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
@@ -3521,22 +3522,31 @@ fn is_proto_or_get_prototype_of(expr: &Expr, unresolved_mark: Mark) -> bool {
 /// In a derived constructor, `super()` returns `this`. Clean up:
 /// - `var r = super(...)` → `super(...)`; mark `r` as this-alias
 /// - `n = r = super(...)` → `super(...)`; mark both as this-aliases
-/// - Replace all references to aliases with `this`
+/// - Replace references to aliases with `this` where `this` is the
+///   constructor's: the body and any arrow nested in it
 /// - Remove `var` declarations for aliases
 /// - Remove trailing `return alias`
+///
+/// A reference inside a plain `function` or a class has its own `this`, so it
+/// cannot be rewritten. The alias is then re-declared as `var alias = this`
+/// right after the `super(...)` statement, which preserves the transpiled
+/// semantics: the alias is `undefined` while `super()` runs and `this` after.
+/// Aliases declared with anything other than `var` fail closed and stay as
+/// they are.
 fn cleanup_super_aliases(body: &mut FunctionBody) {
-    use std::collections::HashSet;
-
-    let mut aliases: HashSet<Atom> = HashSet::new();
-
     // Pass 1: Find super() call statements and collect aliases
-    for stmt in body.stmts.iter_mut() {
+    let mut aliases: HashSet<BindingKey> = HashSet::new();
+    let mut var_declared: HashSet<BindingKey> = HashSet::new();
+    for stmt in body.stmts.iter() {
         // Pattern: `var r = super(...)` as a var decl
         if let Stmt::Decl(Decl::Var(var)) = stmt {
             for decl in &var.decls {
-                if let (Pat::Ident(bi), Some(init)) = (&decl.name, &decl.init) {
-                    if is_super_call(init) {
-                        aliases.insert(bi.id.sym.clone());
+                if let Pat::Ident(bi) = &decl.name {
+                    if var.kind == VarDeclKind::Var {
+                        var_declared.insert(binding_key(&bi.id));
+                    }
+                    if decl.init.as_deref().is_some_and(is_super_call) {
+                        aliases.insert(binding_key(&bi.id));
                     }
                 }
             }
@@ -3548,6 +3558,27 @@ fn cleanup_super_aliases(body: &mut FunctionBody) {
         }
     }
 
+    if aliases.is_empty() {
+        return;
+    }
+
+    // Aliases read from a scope with its own `this` must stay declared.
+    let mut escape_scan = EscapingAliasScan {
+        aliases: &aliases,
+        other_this_depth: 0,
+        escaping: Vec::new(),
+    };
+    body.visit_with(&mut escape_scan);
+    let escaping = escape_scan.escaping;
+    for alias in &escaping {
+        if !var_declared.contains(alias) {
+            aliases.remove(alias);
+        }
+    }
+    let escaping: Vec<BindingKey> = escaping
+        .into_iter()
+        .filter(|alias| aliases.contains(alias))
+        .collect();
     if aliases.is_empty() {
         return;
     }
@@ -3569,7 +3600,7 @@ fn cleanup_super_aliases(body: &mut FunctionBody) {
                         keep_decls.push(d);
                         continue;
                     };
-                    if !aliases.contains(&bi.id.sym) {
+                    if !aliases.contains(&binding_key(&bi.id)) {
                         keep_decls.push(d);
                         continue;
                     }
@@ -3603,7 +3634,7 @@ fn cleanup_super_aliases(body: &mut FunctionBody) {
             // `return alias` → drop (constructor implicitly returns this)
             Stmt::Return(ref ret) => {
                 let should_drop = ret.arg.as_ref().is_some_and(|arg| {
-                    matches!(arg.as_ref(), Expr::Ident(id) if aliases.contains(&id.sym))
+                    matches!(arg.as_ref(), Expr::Ident(id) if aliases.contains(&binding_key(id)))
                         || matches!(arg.as_ref(), Expr::This(..))
                 });
                 if !should_drop {
@@ -3613,7 +3644,69 @@ fn cleanup_super_aliases(body: &mut FunctionBody) {
             other => new_stmts.push(other),
         }
     }
+
+    if !escaping.is_empty() {
+        let super_index = new_stmts.iter().position(
+            |stmt| matches!(stmt, Stmt::Expr(ExprStmt { expr, .. }) if is_super_call(expr)),
+        );
+        if let Some(index) = super_index {
+            let decls = escaping
+                .iter()
+                .map(|(sym, ctxt)| VarDeclarator {
+                    span: DUMMY_SP,
+                    name: Pat::Ident(BindingIdent {
+                        id: Ident::new(sym.clone(), DUMMY_SP, *ctxt),
+                        type_ann: None,
+                    }),
+                    init: Some(Box::new(Expr::This(ThisExpr { span: DUMMY_SP }))),
+                    definite: false,
+                })
+                .collect();
+            new_stmts.insert(
+                index + 1,
+                Stmt::Decl(Decl::Var(Box::new(VarDecl {
+                    span: DUMMY_SP,
+                    ctxt: SyntaxContext::empty(),
+                    kind: VarDeclKind::Var,
+                    declare: false,
+                    decls,
+                }))),
+            );
+        }
+    }
     body.stmts = new_stmts;
+}
+
+/// Alias references inside a plain function or a class body: those scopes
+/// have their own `this`, so the reference cannot become `this`.
+struct EscapingAliasScan<'a> {
+    aliases: &'a HashSet<BindingKey>,
+    other_this_depth: usize,
+    escaping: Vec<BindingKey>,
+}
+
+impl Visit for EscapingAliasScan<'_> {
+    fn visit_ident(&mut self, ident: &Ident) {
+        if self.other_this_depth == 0 {
+            return;
+        }
+        let id = binding_key(ident);
+        if self.aliases.contains(&id) && !self.escaping.contains(&id) {
+            self.escaping.push(id);
+        }
+    }
+
+    fn visit_function(&mut self, function: &Function) {
+        self.other_this_depth += 1;
+        function.visit_children_with(self);
+        self.other_this_depth -= 1;
+    }
+
+    fn visit_class(&mut self, class: &Class) {
+        self.other_this_depth += 1;
+        class.visit_children_with(self);
+        self.other_this_depth -= 1;
+    }
 }
 
 fn remove_constructor_set_prototype_of_this(
@@ -3684,7 +3777,7 @@ fn is_super_call(expr: &Expr) -> bool {
 }
 
 /// Walk an assignment chain like `n = r = super()` and collect all LHS idents as aliases.
-fn collect_assign_chain_aliases(expr: &Expr, aliases: &mut std::collections::HashSet<Atom>) {
+fn collect_assign_chain_aliases(expr: &Expr, aliases: &mut HashSet<BindingKey>) {
     let Expr::Assign(assign) = expr else { return };
     if assign.op != AssignOp::Assign {
         return;
@@ -3693,14 +3786,14 @@ fn collect_assign_chain_aliases(expr: &Expr, aliases: &mut std::collections::Has
     // Check if the RHS is super() or another assignment chain ending in super()
     let rhs_is_super = is_super_call(&assign.right)
         || matches!(assign.right.as_ref(), Expr::Assign(_) if {
-            let mut inner_aliases = std::collections::HashSet::new();
+            let mut inner_aliases = HashSet::new();
             collect_assign_chain_aliases(&assign.right, &mut inner_aliases);
             !inner_aliases.is_empty()
         });
 
     if rhs_is_super {
         if let AssignTarget::Simple(SimpleAssignTarget::Ident(id)) = &assign.left {
-            aliases.insert(id.sym.clone());
+            aliases.insert(binding_key(&id.id));
         }
         // Recurse into RHS for chained assigns
         collect_assign_chain_aliases(&assign.right, aliases);
@@ -3709,10 +3802,7 @@ fn collect_assign_chain_aliases(expr: &Expr, aliases: &mut std::collections::Has
 
 /// Extract the super() call from an assignment chain like `n = r = super(...)`.
 /// Returns Some(super_call_expr) if all LHS idents are known aliases, None otherwise.
-fn extract_super_from_assign_chain(
-    expr: &Expr,
-    aliases: &std::collections::HashSet<Atom>,
-) -> Option<Expr> {
+fn extract_super_from_assign_chain(expr: &Expr, aliases: &HashSet<BindingKey>) -> Option<Expr> {
     let Expr::Assign(assign) = expr else {
         return None;
     };
@@ -3723,7 +3813,7 @@ fn extract_super_from_assign_chain(
     // LHS must be an alias
     let is_alias_lhs = matches!(
         &assign.left,
-        AssignTarget::Simple(SimpleAssignTarget::Ident(id)) if aliases.contains(&id.sym)
+        AssignTarget::Simple(SimpleAssignTarget::Ident(id)) if aliases.contains(&binding_key(&id.id))
     );
     if !is_alias_lhs {
         return None;
@@ -3739,7 +3829,7 @@ fn extract_super_from_assign_chain(
 }
 
 struct AliasToThisRewriter<'a> {
-    aliases: &'a std::collections::HashSet<Atom>,
+    aliases: &'a HashSet<BindingKey>,
 }
 
 impl VisitMut for AliasToThisRewriter<'_> {
@@ -3747,15 +3837,16 @@ impl VisitMut for AliasToThisRewriter<'_> {
         expr.visit_mut_children_with(self);
 
         if let Expr::Ident(id) = expr {
-            if self.aliases.contains(&id.sym) {
-                *expr = Expr::This(swc_core::ecma::ast::ThisExpr { span: DUMMY_SP });
+            if self.aliases.contains(&binding_key(id)) {
+                *expr = Expr::This(ThisExpr { span: DUMMY_SP });
             }
         }
     }
 
-    // Don't descend into nested functions/arrows
+    // Arrows share the constructor's `this`; plain functions and classes do
+    // not, and their alias references are handled by `EscapingAliasScan`.
     fn visit_mut_function(&mut self, _: &mut Function) {}
-    fn visit_mut_arrow_expr(&mut self, _: &mut ArrowExpr) {}
+    fn visit_mut_class(&mut self, _: &mut Class) {}
 }
 
 /// Returns true if the constructor is empty or is the default derived constructor

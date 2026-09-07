@@ -2670,3 +2670,97 @@ fn extends_import_cleanup_respects_dynamic_lookup_and_binding_identity() {
     assert!(output.contains("import \"tslib\";"), "{output}");
     assert!(output.contains("return __extends;"), "{output}");
 }
+
+// ============================================================
+// super() alias references the rewriter cannot turn into `this`
+// ============================================================
+
+#[test]
+fn super_alias_captured_by_a_nested_function_stays_declared() {
+    // The `_this` alias is read from a plain `function` passed to super(); that
+    // function has its own `this`, so the alias must survive as `var a = this`.
+    let input = r#"
+var Foo = (function(e) {
+    function t(t, n) {
+        var a = e.call(this, n, function(e, t, n) {
+            a.setLayout(t, n);
+        }) || this;
+        a._maxSpan = t;
+        return a;
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    constructor(t, n){
+        super(n, function(e, t, n) {
+            a.setLayout(t, n);
+        });
+        var a = this;
+        this._maxSpan = t;
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn super_alias_inside_an_arrow_is_rewritten_to_this() {
+    let input = r#"
+var Foo = (function(e) {
+    function t(n) {
+        var a = e.call(this, n) || this;
+        a.onChange = () => a.update();
+        return a;
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    constructor(n){
+        super(n);
+        this.onChange = () => this.update();
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn super_alias_rewrite_uses_binding_identity() {
+    // The catch parameter shares the alias's name but is a different binding.
+    let input = r#"
+var Foo = (function(e) {
+    function t(n) {
+        var r = e.call(this, n) || this;
+        r.value = n;
+        try {
+            risky();
+        } catch (r) {
+            console.log(r);
+        }
+        return r;
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    constructor(n){
+        super(n);
+        this.value = n;
+        try {
+            risky();
+        } catch (r) {
+            console.log(r);
+        }
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
