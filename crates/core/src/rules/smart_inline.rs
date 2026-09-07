@@ -19,8 +19,8 @@ use super::builtin_aliases::{
     inline_builtin_aliases_stmts, inline_module_builtin_aliases, BuiltinAliasInlineOptions,
 };
 use super::decl_utils::{
-    can_remove_prior_uninitialized_decls, fresh_binding_ident, remove_prior_uninitialized_decls,
-    same_ident, UninitializedDeclKind,
+    can_remove_prior_uninitialized_decls, remove_prior_uninitialized_decls, same_ident,
+    UninitializedDeclKind,
 };
 use super::eval_utils::is_direct_eval_call;
 use super::helper_matcher::BindingKey;
@@ -1551,14 +1551,14 @@ impl VisitMut for IdentInliner<'_> {
 enum AccessKind {
     /// obj.prop or obj["prop"] — maps to (binding_name, prop_key_string)
     Property {
-        binding: Option<BindingIdent>,
+        binding: BindingIdent,
         prop_key: PropKey,
         /// Span of the original statement this access was extracted from.
         span: Span,
     },
     /// obj[n] — maps to (binding_name, index)
     Index {
-        binding: Option<BindingIdent>,
+        binding: BindingIdent,
         index: usize,
         /// Span of the original statement this access was extracted from.
         span: Span,
@@ -1683,15 +1683,8 @@ fn try_fold_use_state_tuple_at(
         return None;
     }
 
-    let Some((first_obj, first_index, Some(first_binding))) = try_extract_index_access(first_read)
-    else {
-        return None;
-    };
-    let Some((second_obj, second_index, Some(second_binding))) =
-        try_extract_index_access(second_read)
-    else {
-        return None;
-    };
+    let (first_obj, first_index, first_binding) = try_extract_index_access(first_read)?;
+    let (second_obj, second_index, second_binding) = try_extract_index_access(second_read)?;
 
     if first_index != 0 || second_index != 1 {
         return None;
@@ -2229,7 +2222,7 @@ fn group_destructuring(mut stmts: Vec<Stmt>, level: RewriteLevel) -> Vec<Stmt> {
 
 /// Try to extract `const t = obj.prop`
 /// Returns `(obj_ident, prop_key, binding_name)`
-fn try_extract_prop_access(stmt: &Stmt) -> Option<(Ident, PropKey, Option<BindingIdent>)> {
+fn try_extract_prop_access(stmt: &Stmt) -> Option<(Ident, PropKey, BindingIdent)> {
     let Stmt::Decl(Decl::Var(var)) = stmt else {
         return None;
     };
@@ -2242,7 +2235,7 @@ fn try_extract_prop_access(stmt: &Stmt) -> Option<(Ident, PropKey, Option<Bindin
     };
     let init = decl.init.as_ref()?;
     let (obj_name, prop_key) = extract_obj_prop(init)?;
-    Some((obj_name, prop_key, Some(bi.clone())))
+    Some((obj_name, prop_key, bi.clone()))
 }
 
 fn extract_obj_prop(expr: &Expr) -> Option<(Ident, PropKey)> {
@@ -2269,7 +2262,7 @@ fn extract_obj_prop(expr: &Expr) -> Option<(Ident, PropKey)> {
 }
 
 /// Try to extract `const t = obj[n]` where n is a numeric literal ≤10
-fn try_extract_index_access(stmt: &Stmt) -> Option<(Ident, usize, Option<BindingIdent>)> {
+fn try_extract_index_access(stmt: &Stmt) -> Option<(Ident, usize, BindingIdent)> {
     let Stmt::Decl(Decl::Var(var)) = stmt else {
         return None;
     };
@@ -2298,7 +2291,7 @@ fn try_extract_index_access(stmt: &Stmt) -> Option<(Ident, usize, Option<Binding
     if idx > 10 || *value < 0.0 || value.fract() != 0.0 {
         return None;
     }
-    Some((obj_id.clone(), idx, Some(bi.clone())))
+    Some((obj_id.clone(), idx, bi.clone()))
 }
 
 /// Determine if accesses are all Property or all Index type
@@ -2378,34 +2371,19 @@ fn flush_property_group(result: &mut Vec<Stmt>, obj: Ident, accesses: Vec<Access
             PropKey::Str(s) => s.clone(),
         };
 
-        match binding {
-            None => {
-                // Standalone access: `obj.prop;` → include in destructuring without alias
-                props.push(ObjectPatProp::Assign(swc_core::ecma::ast::AssignPatProp {
-                    span: DUMMY_SP,
-                    key: BindingIdent {
-                        id: fresh_binding_ident(prop_sym, DUMMY_SP),
-                        type_ann: None,
-                    },
-                    value: None,
-                }));
-            }
-            Some(alias) => {
-                if alias.id.sym == prop_sym {
-                    // Same name: shorthand
-                    props.push(ObjectPatProp::Assign(swc_core::ecma::ast::AssignPatProp {
-                        span: DUMMY_SP,
-                        key: alias.clone(),
-                        value: None,
-                    }));
-                } else {
-                    // Different name: { key: alias }
-                    props.push(ObjectPatProp::KeyValue(KeyValuePatProp {
-                        key: prop_name,
-                        value: Box::new(Pat::Ident(alias.clone())),
-                    }));
-                }
-            }
+        if binding.id.sym == prop_sym {
+            // Same name: shorthand
+            props.push(ObjectPatProp::Assign(swc_core::ecma::ast::AssignPatProp {
+                span: DUMMY_SP,
+                key: binding.clone(),
+                value: None,
+            }));
+        } else {
+            // Different name: { key: alias }
+            props.push(ObjectPatProp::KeyValue(KeyValuePatProp {
+                key: prop_name,
+                value: Box::new(Pat::Ident(binding.clone())),
+            }));
         }
     }
 
@@ -2465,9 +2443,7 @@ fn flush_index_group(result: &mut Vec<Stmt>, obj: Ident, accesses: Vec<AccessKin
         let AccessKind::Index { binding, index, .. } = acc else {
             continue;
         };
-        if let Some(alias) = binding {
-            elems[*index] = Some(Pat::Ident(alias.clone()));
-        }
+        elems[*index] = Some(Pat::Ident(binding.clone()));
     }
 
     result.push(Stmt::Decl(Decl::Var(Box::new(VarDecl {
@@ -2526,24 +2502,18 @@ fn acc_to_stmt(obj: &Ident, acc: AccessKind) -> Stmt {
                 obj: Box::new(Expr::Ident(obj.clone())),
                 prop,
             });
-            match binding {
-                None => Stmt::Expr(ExprStmt {
+            Stmt::Decl(Decl::Var(Box::new(VarDecl {
+                span: acc_span,
+                ctxt: Default::default(),
+                kind: VarDeclKind::Const,
+                declare: false,
+                decls: vec![VarDeclarator {
                     span: acc_span,
-                    expr: Box::new(member_expr),
-                }),
-                Some(alias) => Stmt::Decl(Decl::Var(Box::new(VarDecl {
-                    span: acc_span,
-                    ctxt: Default::default(),
-                    kind: VarDeclKind::Const,
-                    declare: false,
-                    decls: vec![VarDeclarator {
-                        span: acc_span,
-                        name: Pat::Ident(alias),
-                        init: Some(Box::new(member_expr)),
-                        definite: false,
-                    }],
-                }))),
-            }
+                    name: Pat::Ident(binding),
+                    init: Some(Box::new(member_expr)),
+                    definite: false,
+                }],
+            })))
         }
         AccessKind::Index {
             binding,
@@ -2562,24 +2532,18 @@ fn acc_to_stmt(obj: &Ident, acc: AccessKind) -> Stmt {
                     }))),
                 }),
             });
-            match binding {
-                None => Stmt::Expr(ExprStmt {
+            Stmt::Decl(Decl::Var(Box::new(VarDecl {
+                span: acc_span,
+                ctxt: Default::default(),
+                kind: VarDeclKind::Const,
+                declare: false,
+                decls: vec![VarDeclarator {
                     span: acc_span,
-                    expr: Box::new(member_expr),
-                }),
-                Some(alias) => Stmt::Decl(Decl::Var(Box::new(VarDecl {
-                    span: acc_span,
-                    ctxt: Default::default(),
-                    kind: VarDeclKind::Const,
-                    declare: false,
-                    decls: vec![VarDeclarator {
-                        span: acc_span,
-                        name: Pat::Ident(alias),
-                        init: Some(Box::new(member_expr)),
-                        definite: false,
-                    }],
-                }))),
-            }
+                    name: Pat::Ident(binding),
+                    init: Some(Box::new(member_expr)),
+                    definite: false,
+                }],
+            })))
         }
     }
 }
