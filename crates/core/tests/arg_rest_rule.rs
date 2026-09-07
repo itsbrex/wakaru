@@ -855,3 +855,34 @@ class C {
 "#;
     assert_eq_normalized(&apply(input), expected);
 }
+
+#[test]
+fn copy_loop_length_binding_reused_after_the_loop_stays_declared() {
+    // Minifiers reuse the copy loop's length variable as the `_this` alias.
+    // Removing the loop must not remove its declaration.
+    let input = r#"
+function Sub() {
+    for (var e = arguments.length, n = Array(e), r = 0; r < e; r++) n[r] = arguments[r];
+    return (e = Base.call.apply(Base, [this].concat(n)) || this).state = {}, e;
+}
+"#;
+    let output = apply(input);
+    assert!(output.contains("function Sub(...n)"), "{output}");
+    assert!(output.contains("var e = n.length;"), "{output}");
+    assert!(!output.contains("arguments"), "{output}");
+}
+
+#[test]
+fn copy_loop_index_binding_reused_after_the_loop_stays_declared() {
+    let input = r#"
+function count() {
+    for (var e = arguments.length, n = Array(e), r = 0; r < e; r++) n[r] = arguments[r];
+    use(n);
+    return r;
+}
+"#;
+    let output = apply(input);
+    assert!(output.contains("function count(...n)"), "{output}");
+    assert!(output.contains("var r = n.length;"), "{output}");
+    assert!(output.contains("return r;"), "{output}");
+}

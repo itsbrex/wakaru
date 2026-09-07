@@ -5,7 +5,8 @@ use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
     AssignOp, AssignTarget, BinaryOp, BindingIdent, Callee, Constructor, Decl, Expr, Function,
     FunctionBody, Ident, Lit, MemberExpr, MemberProp, Number, Param, ParamOrTsParamProp, Pat,
-    RestPat, SimpleAssignTarget, Stmt, UpdateOp, VarDeclKind, VarDeclOrExpr,
+    RestPat, SimpleAssignTarget, Stmt, UpdateOp, VarDecl, VarDeclKind, VarDeclOrExpr,
+    VarDeclarator,
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
@@ -13,6 +14,7 @@ use super::decl_utils::{
     binding_id, contains_use_strict_string_statement, fresh_binding_ident,
     has_direct_use_strict_directive, ident_matches_binding, BindingId,
 };
+use super::helper_matcher::count_binding_refs;
 use super::rename_utils::{rename_bindings, BindingRename};
 use super::RewriteLevel;
 
@@ -890,9 +892,20 @@ fn remove_arguments_copy_loop(body: &mut FunctionBody, fixed_param_count: usize)
     let old = std::mem::take(&mut body.stmts);
     let mut result = Vec::with_capacity(old.len());
     let mut i = 0;
+    // Where the removed loop stood, and the bindings its head declared besides
+    // the copy: the length alias and the index. Minified code reuses them
+    // after the loop (`e` becomes the `_this` alias), so they are re-declared
+    // there when a reference survives.
+    let mut removed_loop: Option<(usize, Vec<(Ident, Box<Expr>)>)> = None;
 
     while i < old.len() {
-        if detect_copy_var_ident_from_stmt(&old[i], fixed_param_count).is_some() {
+        if let Some(copy) = detect_copy_var_ident_from_stmt(&old[i], fixed_param_count) {
+            if removed_loop.is_none() {
+                removed_loop = Some((
+                    result.len(),
+                    copy_loop_side_bindings(&old[i], &binding_id(&copy)),
+                ));
+            }
             i += 1;
             continue;
         }
@@ -902,13 +915,22 @@ fn remove_arguments_copy_loop(body: &mut FunctionBody, fixed_param_count: usize)
                 if detect_ts_copy_loop_from_stmt(&old[i + 1], fixed_param_count)
                     .is_some_and(|loop_copy| loop_copy == binding_id(&copy))
                 {
+                    if removed_loop.is_none() {
+                        removed_loop = Some((
+                            result.len(),
+                            copy_loop_side_bindings(&old[i + 1], &binding_id(&copy)),
+                        ));
+                    }
                     i += 2;
                     continue;
                 }
             }
         }
 
-        if detect_ts_copy_loop_from_stmt(&old[i], fixed_param_count).is_some() {
+        if let Some(copy) = detect_ts_copy_loop_from_stmt(&old[i], fixed_param_count) {
+            if removed_loop.is_none() {
+                removed_loop = Some((result.len(), copy_loop_side_bindings(&old[i], &copy)));
+            }
             i += 1;
             continue;
         }
@@ -917,7 +939,73 @@ fn remove_arguments_copy_loop(body: &mut FunctionBody, fixed_param_count: usize)
         i += 1;
     }
 
+    if let Some((index, bindings)) = removed_loop {
+        let decls: Vec<VarDeclarator> = bindings
+            .into_iter()
+            .filter(|(ident, _)| {
+                let key = binding_id(ident);
+                result.iter().any(|stmt| count_binding_refs(stmt, &key) > 0)
+            })
+            .map(|(ident, length)| VarDeclarator {
+                span: DUMMY_SP,
+                name: Pat::Ident(BindingIdent {
+                    id: ident,
+                    type_ann: None,
+                }),
+                init: Some(length),
+                definite: false,
+            })
+            .collect();
+        if !decls.is_empty() {
+            result.insert(
+                index,
+                Stmt::Decl(Decl::Var(Box::new(VarDecl {
+                    span: DUMMY_SP,
+                    ctxt: Default::default(),
+                    kind: VarDeclKind::Var,
+                    declare: false,
+                    decls,
+                }))),
+            );
+        }
+    }
+
     body.stmts = result;
+}
+
+/// The `var` bindings a copy loop's head declares other than the copy itself,
+/// each paired with the loop's own `arguments.length` expression: once the
+/// loop has run, that is the value each of them holds. The expression is
+/// cloned rather than rebuilt so it keeps the resolver's context and the
+/// rewriter that follows turns it into the rest parameter's length.
+fn copy_loop_side_bindings(stmt: &Stmt, copy: &BindingId) -> Vec<(Ident, Box<Expr>)> {
+    let Stmt::For(for_stmt) = stmt else {
+        return Vec::new();
+    };
+    let Some(VarDeclOrExpr::VarDecl(init)) = &for_stmt.init else {
+        return Vec::new();
+    };
+    let from_head = init
+        .decls
+        .first()
+        .and_then(|decl| decl.init.as_deref())
+        .filter(|expr| is_arguments_length_expr(expr));
+    let from_test = for_stmt.test.as_deref().and_then(|test| match test {
+        Expr::Bin(bin) if is_arguments_length_expr(&bin.right) => Some(bin.right.as_ref()),
+        _ => None,
+    });
+    let Some(length) = from_head.or(from_test) else {
+        return Vec::new();
+    };
+    init.decls
+        .iter()
+        .filter_map(|decl| match &decl.name {
+            Pat::Ident(binding) if binding_id(&binding.id) != *copy => {
+                Some((binding.id.clone(), Box::new(length.clone())))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 struct ArgumentsRewriter {
