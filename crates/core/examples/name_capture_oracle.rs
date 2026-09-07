@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 use swc_core::common::{
-    sync::Lrc, FileName, Globals, Mark, SourceMap, Span, SyntaxContext, GLOBALS,
+    sync::Lrc, FileName, Globals, Mark, SourceMap, Span, Spanned, SyntaxContext, GLOBALS,
 };
 use swc_core::ecma::ast::*;
 use swc_core::ecma::atoms::Atom;
@@ -75,6 +75,9 @@ struct Frame {
 struct Oracle<'a> {
     unresolved_mark: Mark,
     cm: &'a SourceMap,
+    /// Line of the innermost enclosing statement with a real span, so a
+    /// synthesized identifier (dummy span) still reports a usable position.
+    enclosing_line: usize,
     frames: Vec<Frame>,
     report: Report,
     all_binding_names: HashSet<Atom>,
@@ -89,7 +92,7 @@ struct Oracle<'a> {
 impl Oracle<'_> {
     fn line(&self, span: Span) -> usize {
         if span.is_dummy() {
-            0
+            self.enclosing_line
         } else {
             self.cm.lookup_char_pos(span.lo).line
         }
@@ -270,6 +273,15 @@ fn function_scope_names(params: &[Pat], body: Option<&[Stmt]>) -> HashSet<Atom> 
 }
 
 impl Visit for Oracle<'_> {
+    fn visit_stmt(&mut self, s: &Stmt) {
+        let saved = self.enclosing_line;
+        if !s.span().is_dummy() {
+            self.enclosing_line = self.cm.lookup_char_pos(s.span().lo).line;
+        }
+        s.visit_children_with(self);
+        self.enclosing_line = saved;
+    }
+
     fn visit_module(&mut self, m: &Module) {
         self.push_kind("module", Self::module_names(&m.body));
         m.visit_children_with(self);
@@ -525,6 +537,7 @@ fn run_oracle(module: &Module, unresolved_mark: Mark, cm: &SourceMap) -> Report 
     let mut oracle = Oracle {
         unresolved_mark,
         cm,
+        enclosing_line: 0,
         frames: Vec::new(),
         report: Report::default(),
         all_binding_names: HashSet::new(),
