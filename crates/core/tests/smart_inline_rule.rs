@@ -1682,3 +1682,22 @@ function read(foo) {
 "#;
     assert_eq_normalized(&apply(input), expected);
 }
+
+#[test]
+fn generated_alias_chain_inlines_to_its_source() {
+    // `$` is replaced by its init `x`, and `x` by `D`; the replacement for `$`
+    // must already be `D`, or the removed middle link is left behind.
+    let input = r#"
+function factory(l) {
+    var D = function() {};
+    D.foo = 1;
+    const x = D;
+    const $ = x;
+    l.default = $;
+}
+"#;
+    let output = apply(input);
+    assert!(output.contains("l.default = D;"), "{output}");
+    assert!(!output.contains("const x"), "{output}");
+    assert!(!output.contains("const $"), "{output}");
+}

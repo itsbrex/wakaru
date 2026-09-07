@@ -727,6 +727,11 @@ fn inline_temp_vars(
         return stmts;
     }
 
+    // `const x = D, $ = x; use($)`: `$` maps to `x` and `x` to `D`, and both
+    // declarations go. The inliner does not revisit a replacement, so the
+    // chain is resolved here: every alias maps to the surviving source.
+    let to_inline = resolve_alias_chains(to_inline);
+
     // Apply inlining: remove definition stmts, replace single usage with init expr
     let mut result = Vec::new();
     for stmt in stmts {
@@ -748,6 +753,34 @@ fn inline_temp_vars(
     }
 
     result
+}
+
+/// Follow every alias whose init is itself an inlined alias to the end of the
+/// chain. A cycle cannot occur among single-use `const` aliases, but the hop
+/// count is bounded anyway.
+fn resolve_alias_chains(
+    mut to_inline: HashMap<BindingKey, Box<Expr>>,
+) -> HashMap<BindingKey, Box<Expr>> {
+    let keys: Vec<BindingKey> = to_inline.keys().cloned().collect();
+    for key in keys {
+        let mut init = to_inline[&key].clone();
+        let mut hops = 0;
+        while let Expr::Ident(id) = init.as_ref() {
+            let inner = (id.sym.clone(), id.ctxt);
+            if inner == key || hops >= to_inline.len() {
+                break;
+            }
+            match to_inline.get(&inner) {
+                Some(next) => {
+                    init = next.clone();
+                    hops += 1;
+                }
+                None => break,
+            }
+        }
+        to_inline.insert(key, init);
+    }
+    to_inline
 }
 
 fn forward_adjacent_assignment_aliases(
