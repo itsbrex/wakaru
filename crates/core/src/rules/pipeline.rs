@@ -905,11 +905,17 @@ fn apply_rules_impl(
     let mut started = options.start_from.is_none();
 
     for descriptor in RULE_DESCRIPTORS {
-        if !descriptor.is_enabled(ctx.clone()) {
-            continue;
-        }
+        // `start_from` / `stop_after` name pipeline positions, so they take
+        // effect whether or not the named rule is enabled at this level:
+        // stopping at a disabled rule stops there instead of running to the end.
         if !started && options.start_from == Some(descriptor.id) {
             started = true;
+        }
+        if !descriptor.is_enabled(ctx.clone()) {
+            if started && options.stop_after == Some(descriptor.id) {
+                return;
+            }
+            continue;
         }
         if !started {
             continue;
@@ -958,6 +964,59 @@ mod tests {
             })))],
             shebang: None,
         }
+    }
+
+    #[test]
+    fn stop_after_a_disabled_rule_stops_at_its_position() {
+        GLOBALS.set(&Default::default(), || {
+            let mut module = Module {
+                span: DUMMY_SP,
+                body: Vec::new(),
+                shebang: None,
+            };
+            let unresolved_mark = Mark::new();
+            let mut ran: Vec<&'static str> = Vec::new();
+            // SmartRename is standard_or_above, so it is disabled at Minimal.
+            apply_rules_with_observer(
+                &mut module,
+                unresolved_mark,
+                RulePipelineOptions::until("SmartRename").with_rewrite_level(RewriteLevel::Minimal),
+                &mut |name, _| ran.push(name),
+            );
+            assert!(
+                !ran.contains(&"SmartRename"),
+                "disabled stop rule must not run: {ran:?}"
+            );
+            assert!(
+                !ran.contains(&"UnParameters3"),
+                "rules after the disabled stop rule must not run: {ran:?}"
+            );
+            assert!(
+                ran.contains(&"UnParameters2"),
+                "rules before the stop position still run: {ran:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn start_from_a_disabled_rule_starts_at_its_position() {
+        GLOBALS.set(&Default::default(), || {
+            let mut module = Module {
+                span: DUMMY_SP,
+                body: Vec::new(),
+                shebang: None,
+            };
+            let unresolved_mark = Mark::new();
+            let mut ran: Vec<&'static str> = Vec::new();
+            apply_rules_with_observer(
+                &mut module,
+                unresolved_mark,
+                RulePipelineOptions::between("SmartRename", "UnParameters3")
+                    .with_rewrite_level(RewriteLevel::Minimal),
+                &mut |name, _| ran.push(name),
+            );
+            assert_eq!(ran, vec!["UnParameters3"], "{ran:?}");
+        });
     }
 
     #[test]
