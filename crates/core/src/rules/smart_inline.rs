@@ -16,7 +16,8 @@ use crate::js_names::{is_likely_generated_alias, is_stable_builtin_alias_root};
 use crate::utils::paren::{strip_parens, strip_parens_mut};
 
 use super::builtin_aliases::{
-    inline_builtin_aliases_stmts, inline_module_builtin_aliases, BuiltinAliasInlineOptions,
+    collect_local_export_specifier_keys, inline_builtin_aliases_stmts,
+    inline_module_builtin_aliases, BuiltinAliasInlineOptions,
 };
 use super::decl_utils::{
     can_remove_prior_uninitialized_decls, remove_prior_uninitialized_decls, same_ident,
@@ -30,6 +31,9 @@ pub struct SmartInline {
     level: RewriteLevel,
     unresolved_mark: Option<Mark>,
     use_state_bindings: HashSet<BindingKey>,
+    /// Module-scope bindings named by `export { local }` specifiers. Their
+    /// declarations must survive: a specifier can only name a binding.
+    exported_bindings: HashSet<BindingKey>,
     initialized_binding_scopes: Vec<HashSet<BindingKey>>,
 }
 
@@ -39,6 +43,7 @@ impl SmartInline {
             level,
             unresolved_mark: None,
             use_state_bindings: HashSet::new(),
+            exported_bindings: HashSet::new(),
             initialized_binding_scopes: Vec::new(),
         }
     }
@@ -48,6 +53,7 @@ impl SmartInline {
             level,
             unresolved_mark: Some(unresolved_mark),
             use_state_bindings: HashSet::new(),
+            exported_bindings: HashSet::new(),
             initialized_binding_scopes: Vec::new(),
         }
     }
@@ -64,6 +70,10 @@ impl VisitMut for SmartInline {
         let previous_use_state_bindings = std::mem::replace(
             &mut self.use_state_bindings,
             collect_use_state_bindings(module),
+        );
+        let previous_exported_bindings = std::mem::replace(
+            &mut self.exported_bindings,
+            collect_local_export_specifier_keys(module),
         );
 
         // Step 0a: Inline zero-param arrow ident wrappers (const X = () => Y) globally.
@@ -88,11 +98,13 @@ impl VisitMut for SmartInline {
             self.level,
             self.unresolved_mark,
             &self.use_state_bindings,
+            &self.exported_bindings,
             &initialized_bindings,
         );
 
         module.visit_mut_children_with(self);
         self.use_state_bindings = previous_use_state_bindings;
+        self.exported_bindings = previous_exported_bindings;
     }
 
     fn visit_mut_stmts(&mut self, stmts: &mut Vec<Stmt>) {
@@ -103,6 +115,7 @@ impl VisitMut for SmartInline {
             self.level,
             self.unresolved_mark,
             &self.use_state_bindings,
+            &self.exported_bindings,
             &initialized_bindings,
         );
         stmts.visit_mut_children_with(self);
@@ -356,6 +369,7 @@ fn process_module_stmt_runs(
     level: RewriteLevel,
     unresolved_mark: Option<Mark>,
     use_state_bindings: &HashSet<BindingKey>,
+    exported_bindings: &HashSet<BindingKey>,
     initialized_bindings: &HashSet<BindingKey>,
 ) {
     let mut new_body = Vec::with_capacity(body.len());
@@ -371,6 +385,7 @@ fn process_module_stmt_runs(
                     level,
                     unresolved_mark,
                     use_state_bindings,
+                    exported_bindings,
                     initialized_bindings,
                 );
                 new_body.push(other);
@@ -383,6 +398,7 @@ fn process_module_stmt_runs(
         level,
         unresolved_mark,
         use_state_bindings,
+        exported_bindings,
         initialized_bindings,
     );
 
@@ -395,6 +411,7 @@ fn flush_stmt_run(
     level: RewriteLevel,
     unresolved_mark: Option<Mark>,
     use_state_bindings: &HashSet<BindingKey>,
+    exported_bindings: &HashSet<BindingKey>,
     initialized_bindings: &HashSet<BindingKey>,
 ) {
     if run.is_empty() {
@@ -407,6 +424,7 @@ fn flush_stmt_run(
             level,
             unresolved_mark,
             use_state_bindings,
+            exported_bindings,
             initialized_bindings,
         )
         .into_iter()
@@ -419,6 +437,7 @@ fn process_stmts(
     level: RewriteLevel,
     unresolved_mark: Option<Mark>,
     use_state_bindings: &HashSet<BindingKey>,
+    exported_bindings: &HashSet<BindingKey>,
     initialized_bindings: &HashSet<BindingKey>,
 ) -> Vec<Stmt> {
     // Pass 0: inline builtin global aliases (const x = Math.floor → replace x with Math.floor)
@@ -429,6 +448,7 @@ fn process_stmts(
             stmts,
             unresolved_mark,
             BuiltinAliasInlineOptions::const_only(),
+            exported_bindings,
         )
     } else {
         stmts

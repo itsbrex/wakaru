@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use swc_core::common::{Mark, Span};
 use swc_core::ecma::ast::{
-    CallExpr, Decl, Expr, Ident, MemberExpr, MemberProp, Module, ModuleItem, Pat, PropName, Stmt,
-    UnaryExpr, UnaryOp, UpdateExpr, VarDeclKind, WithStmt,
+    CallExpr, Decl, ExportSpecifier, Expr, Ident, MemberExpr, MemberProp, Module, ModuleDecl,
+    ModuleExportName, ModuleItem, Pat, PropName, Stmt, UnaryExpr, UnaryOp, UpdateExpr, VarDeclKind,
+    WithStmt,
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
@@ -62,6 +63,15 @@ pub(crate) fn inline_module_builtin_aliases(
         return false;
     }
 
+    // `export { alias }` names the binding itself: the specifier cannot carry
+    // `Object.create`, so removing the declaration would leave it dangling and
+    // the module would fail to link. Keep exported aliases as they are.
+    let exported = collect_local_export_specifier_keys(module);
+    candidates.retain(|key, _| !exported.contains(key));
+    if candidates.is_empty() {
+        return false;
+    }
+
     if options.reject_var_with_dynamic_scope && module_has_dynamic_scope_construct(module) {
         candidates.retain(|_, candidate| candidate.decl_kind != VarDeclKind::Var);
     }
@@ -100,12 +110,16 @@ pub(crate) fn inline_module_builtin_aliases(
     true
 }
 
+/// `pinned` bindings keep their declaration: module-scope aliases named by an
+/// `export { alias }` specifier (see `collect_local_export_specifier_keys`).
 pub(crate) fn inline_builtin_aliases_stmts(
     mut stmts: Vec<Stmt>,
     unresolved_mark: Option<Mark>,
     options: BuiltinAliasInlineOptions,
+    pinned: &HashSet<BindingKey>,
 ) -> Vec<Stmt> {
     let mut candidates = collect_stmt_candidates(&stmts, unresolved_mark, options);
+    candidates.retain(|key, _| !pinned.contains(key));
     if candidates.is_empty() {
         return stmts;
     }
@@ -145,6 +159,29 @@ pub(crate) fn inline_builtin_aliases_stmts(
     let mut inliner = BuiltinAliasInliner { map: &to_inline };
     stmts.visit_mut_with(&mut inliner);
     stmts
+}
+
+/// The local bindings named by `export { local }` / `export { local as x }`
+/// specifiers without a source.
+pub(crate) fn collect_local_export_specifier_keys(module: &Module) -> HashSet<BindingKey> {
+    let mut keys = HashSet::new();
+    for item in &module.body {
+        let ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(export)) = item else {
+            continue;
+        };
+        if export.src.is_some() {
+            continue;
+        }
+        for specifier in &export.specifiers {
+            let ExportSpecifier::Named(named) = specifier else {
+                continue;
+            };
+            if let ModuleExportName::Ident(local) = &named.orig {
+                keys.insert(binding_key(local));
+            }
+        }
+    }
+    keys
 }
 
 fn collect_module_candidates(

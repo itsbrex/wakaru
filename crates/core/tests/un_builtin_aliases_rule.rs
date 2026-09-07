@@ -135,3 +135,25 @@ use2(e(value));
     let output = apply(input);
     assert_eq_normalized(&output, input);
 }
+
+#[test]
+fn alias_named_by_export_specifier_remains_declared() {
+    // `export { o }` can only name a binding, so the alias declaration has to
+    // stay even though every expression use could be inlined.
+    let input = r#"
+var o = Object.create;
+var d = Object.defineProperty;
+function f(q) {
+    return d(o(q), "x", { value: 1 });
+}
+export { o, f };
+"#;
+    let expected = r#"
+var o = Object.create;
+function f(q) {
+    return Object.defineProperty(o(q), "x", { value: 1 });
+}
+export { o, f };
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}

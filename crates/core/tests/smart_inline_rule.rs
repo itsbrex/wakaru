@@ -1,7 +1,9 @@
 mod common;
 
 use common::{assert_eq_normalized, render_pipeline, render_rule};
-use wakaru_core::{decompile, rules::SmartInline, DecompileOptions, RewriteLevel};
+use wakaru_core::{
+    decompile, rules::SmartInline, validate_output_modules, DecompileOptions, RewriteLevel,
+};
 
 fn apply(input: &str) -> String {
     apply_with_level(input, RewriteLevel::Standard)
@@ -1593,4 +1595,50 @@ console.log(e);
 "#;
     let output = apply(input);
     assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn exported_builtin_alias_declaration_is_kept() {
+    // `export { o }` names the alias binding. Inlining the uses is fine, but
+    // removing the declaration leaves the export specifier dangling and the
+    // module fails to link.
+    let input = r#"
+const o = Object.create;
+const d = Object.defineProperty;
+function f(q) {
+    return d(o(q), "x", { value: 1 });
+}
+export { o, f };
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("const o = Object.create"),
+        "exported alias declaration must survive, got:\n{output}"
+    );
+    assert!(
+        !output.contains("const d ="),
+        "non-exported alias should still be inlined, got:\n{output}"
+    );
+    assert!(output.contains("export { o, f }"), "{output}");
+}
+
+#[test]
+fn exported_builtin_alias_declaration_is_kept_through_pipeline() {
+    let input = r#"
+var o = Object.create;
+function f(q) {
+    return o(q);
+}
+export { o, f };
+"#;
+    // SmartRename may respell the binding; the export must still name a
+    // declared binding and the module must validate as a graph.
+    let output = apply_pipeline(input);
+    assert!(
+        output.contains("= Object.create;"),
+        "exported alias declaration must survive, got:\n{output}"
+    );
+    assert!(output.contains("as o, f }"), "{output}");
+    let findings = validate_output_modules(&[("input.js".to_string(), output)]);
+    assert!(findings.is_empty(), "{findings:#?}");
 }

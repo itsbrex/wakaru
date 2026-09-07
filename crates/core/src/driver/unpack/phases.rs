@@ -2909,7 +2909,11 @@ module.exports = value;
     }
 
     #[test]
-    fn unpack_prunes_exports_for_inlined_local_aliases() {
+    fn unpack_keeps_exported_builtin_alias_declared() {
+        // `export { create }` names the alias binding, so the alias inliner
+        // leaves the declaration alone instead of removing it and relying on
+        // stale-export pruning to drop the specifier (which would also drop
+        // the export from every consumer's point of view).
         let modules = vec![UnpackedModule {
             id: "helper".to_string(),
             is_entry: false,
@@ -2936,13 +2940,15 @@ export { create, wrap };
         let code = &output.modules[0].code;
 
         assert!(
-            !code.contains("create }") && !code.contains("create,"),
-            "inlined alias should not remain exported:\n{code}"
+            code.contains("= Object.create;"),
+            "exported alias declaration should survive:\n{code}"
         );
         assert!(
-            code.contains("wrap"),
-            "live export should be preserved:\n{code}"
+            code.contains("create") && code.contains("wrap"),
+            "both exports should be preserved:\n{code}"
         );
+        let findings = crate::validate_output_modules(&[("helper.js".to_string(), code.clone())]);
+        assert!(findings.is_empty(), "{findings:#?}");
     }
 
     #[test]
