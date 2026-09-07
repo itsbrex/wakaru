@@ -23,6 +23,9 @@ cargo test --test my_rule_rule
 
 # Run with backtrace (useful for infinite recursion / panics)
 RUST_BACKTRACE=1 cargo test -- --nocapture
+
+# Check identifier contexts after the pipeline over a directory of modules
+cargo run --profile dev-release -p wakaru-core --example name_capture_oracle -- path/to/modules/ > oracle.jsonl
 ```
 
 ## Rule Trace
@@ -89,6 +92,35 @@ findings are not bugs. The checks are conservative: a provider whose export
 set is unknowable (it re-exports an external package or a missing module)
 suppresses missing-name findings for its consumers instead of guessing. The
 implementation lives in `crates/core/src/output_validate.rs`.
+
+## Identifier Context Oracle
+
+`crates/core/examples/name_capture_oracle.rs` runs parse → resolver → the
+Standard pipeline over a directory of modules and reports identifier-context
+defects that printed output cannot show:
+
+- *captured*: an unresolved reference whose emitted name an enclosing scope
+  declares, so the printed text binds to the local (a miscompile).
+- *unmarked*: a reference with an empty `SyntaxContext`, which only a rule that
+  built the identifier from a string can produce.
+- *dangling*: a reference whose context is neither unresolved nor empty and
+  matches no declared binding `(sym, ctxt)`; a rule minted a fresh context for
+  a binding and rebuilt the reference or the declaration instead of cloning it.
+
+```bash
+cargo run --profile dev-release -p wakaru-core --example name_capture_oracle -- \
+  path/to/modules/ > oracle.jsonl        # one JSON object per module on stdout
+                                         # aggregate totals on stderr
+```
+
+The expected result on any corpus is zero for all three. Run it after a change
+to identifier synthesis, renaming, or the unpacker handoff; the fixture suite
+compares text and stays green when only contexts are wrong. A dangling
+reference also flags a rule that removed a declaration while an export
+specifier or a reference to it survived, which prints as valid-looking text and
+fails only when the module loads. The contract the oracle enforces is the
+identity table in
+[architecture.md](architecture.md#key-design-pattern-unresolved_mark).
 
 ## Snapshot Layers
 
