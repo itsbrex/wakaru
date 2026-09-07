@@ -677,3 +677,94 @@ function render(Object, props) {
 "#;
     assert_eq_normalized(&render_with_level(input, RewriteLevel::Standard), expected);
 }
+
+#[test]
+fn display_name_in_try_block_renames_the_enclosing_binding() {
+    // Emitted by the displayName plugins: the assignment is wrapped in
+    // `try`/`catch`, while the component binding lives in the enclosing scope.
+    let input = r#"
+var c = () => React.createElement("div", null);
+try {
+    c.displayName = "LoadableImage";
+} catch (e) {}
+var Baz = () => React.createElement(c, null);
+"#;
+    let expected = r#"
+var LoadableImage = () => <div />;
+try {
+    LoadableImage.displayName = "LoadableImage";
+} catch (e) {}
+var Baz = () => <LoadableImage />;
+"#;
+    assert_eq_normalized(&render_with_level(input, RewriteLevel::Standard), expected);
+}
+
+#[test]
+fn display_name_in_nested_block_renames_the_binding_declared_in_the_function() {
+    let input = r#"
+function o() {
+    let e = i.createContext[s];
+    if (!e) {
+        Object.defineProperty(i.createContext, s, {
+            value: e = i.createContext({}),
+            configurable: true
+        });
+        e.displayName = "ApolloContext";
+    }
+    return e;
+}
+"#;
+    let expected = r#"
+function o() {
+    let ApolloContext = i.createContext[s];
+    if (!ApolloContext) {
+        Object.defineProperty(i.createContext, s, {
+            value: ApolloContext = i.createContext({}),
+            configurable: true
+        });
+        ApolloContext.displayName = "ApolloContext";
+    }
+    return ApolloContext;
+}
+"#;
+    assert_eq_normalized(&render_with_level(input, RewriteLevel::Standard), expected);
+}
+
+#[test]
+fn hoisted_var_display_name_in_nested_block_renames_the_function_scope_binding() {
+    let input = r#"
+function F(x) {
+    if (x) {
+        var t = () => React.createElement("div", null);
+        t.displayName = "Foo";
+    }
+    return React.createElement(t, null);
+}
+"#;
+    let expected = r#"
+function F(x) {
+    if (x) {
+        var Foo = () => <div />;
+        Foo.displayName = "Foo";
+    }
+    return <Foo />;
+}
+"#;
+    assert_eq_normalized(&render_with_level(input, RewriteLevel::Standard), expected);
+}
+
+#[test]
+fn display_name_on_a_binding_declared_outside_the_processed_list_is_not_renamed() {
+    // `t` is a parameter: the body's statement list does not declare it, so
+    // renaming only the body would leave the parameter behind.
+    let input = r#"
+function F(t) {
+    t.displayName = "Foo";
+    return React.createElement(t, null);
+}
+"#;
+    let output = render_with_level(input, RewriteLevel::Standard);
+    assert!(!output.contains("Foo."), "{output}");
+    assert!(output.contains("function F(t)"), "{output}");
+    assert!(output.contains("t.displayName = \"Foo\";"), "{output}");
+}

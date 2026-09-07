@@ -12,6 +12,7 @@ use swc_core::ecma::ast::{
     NewExpr, Number, ObjectLit, OptCall, Param, Pat, Prop, PropName, PropOrSpread, SpreadElement,
     Stmt, Str, TaggedTpl, VarDecl, VarDeclKind, VarDeclarator,
 };
+use swc_core::ecma::utils::find_pat_ids;
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
 use crate::analysis::binding_uses::BindingUseIndex;
@@ -159,9 +160,13 @@ impl UnJsx {
         }
     }
 
-    fn process_stmts(&mut self, stmts: &mut Vec<Stmt>) {
-        let (renames, name_registry) =
-            collect_stmt_renames(stmts, self.unresolved_mark, &self.import_pragmas);
+    fn process_stmts(&mut self, stmts: &mut Vec<Stmt>, list_is_function_scope: bool) {
+        let (renames, name_registry) = collect_stmt_renames(
+            stmts,
+            self.unresolved_mark,
+            &self.import_pragmas,
+            list_is_function_scope,
+        );
         rename_bindings(stmts, &renames);
 
         self.used_names.push(name_registry);
@@ -600,7 +605,7 @@ impl VisitMut for UnJsx {
             return;
         }
         if stmts_have_jsx_content(&block.stmts, &self.import_pragmas) {
-            self.process_stmts(&mut block.stmts);
+            self.process_stmts(&mut block.stmts, false);
         } else {
             block.visit_mut_children_with(self);
         }
@@ -614,7 +619,7 @@ impl VisitMut for UnJsx {
             return;
         }
         if stmts_have_jsx_content(&body.stmts, &self.import_pragmas) {
-            self.process_stmts(&mut body.stmts);
+            self.process_stmts(&mut body.stmts, true);
         } else {
             body.visit_mut_children_with(self);
         }
@@ -867,26 +872,169 @@ fn collect_import_pragmas(items: &[ModuleItem]) -> HashMap<BindingId, &'static s
     map
 }
 
-fn has_display_name_candidates<'a>(stmts: impl Iterator<Item = &'a Stmt>) -> bool {
-    stmts.into_iter().any(|stmt| {
-        let Stmt::Expr(expr_stmt) = stmt else {
-            return false;
-        };
-        let Expr::Assign(assign) = expr_stmt.expr.as_ref() else {
-            return false;
-        };
-        if assign.op != AssignOp::Assign {
-            return false;
+/// `x.displayName = "Name"` assignments that belong to a statement list's
+/// scope: direct statements plus those nested in `try`, `if`, loop, and
+/// labeled bodies. The scan stops at function and class boundaries because a
+/// binding named there is renamed when that body is processed.
+#[derive(Default)]
+struct DisplayNameAssignScan {
+    candidates: Vec<(Ident, Str)>,
+}
+
+impl Visit for DisplayNameAssignScan {
+    fn visit_function(&mut self, _: &swc_core::ecma::ast::Function) {}
+
+    fn visit_arrow_expr(&mut self, _: &ArrowExpr) {}
+
+    fn visit_class(&mut self, _: &swc_core::ecma::ast::Class) {}
+
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        if let Some(candidate) = display_name_assignment(stmt) {
+            self.candidates.push(candidate);
         }
-        let swc_core::ecma::ast::AssignTarget::Simple(
-            swc_core::ecma::ast::SimpleAssignTarget::Member(member),
-        ) = &assign.left
-        else {
-            return false;
-        };
-        matches!(&member.prop, MemberProp::Ident(prop) if prop.sym.as_ref() == "displayName")
-            && matches!(member.obj.as_ref(), Expr::Ident(obj) if obj.sym.len() <= 2)
-    })
+        stmt.visit_children_with(self);
+    }
+}
+
+fn display_name_assignment(stmt: &Stmt) -> Option<(Ident, Str)> {
+    let Stmt::Expr(expr_stmt) = stmt else {
+        return None;
+    };
+    let Expr::Assign(AssignExpr {
+        op: AssignOp::Assign,
+        left,
+        right,
+        ..
+    }) = expr_stmt.expr.as_ref()
+    else {
+        return None;
+    };
+    let swc_core::ecma::ast::AssignTarget::Simple(simple) = left else {
+        return None;
+    };
+    let swc_core::ecma::ast::SimpleAssignTarget::Member(member) = simple else {
+        return None;
+    };
+    let Expr::Ident(object) = member.obj.as_ref() else {
+        return None;
+    };
+    let MemberProp::Ident(prop) = &member.prop else {
+        return None;
+    };
+    if prop.sym != *"displayName" || object.sym.len() > 2 {
+        return None;
+    }
+    let Expr::Lit(Lit::Str(display_name)) = right.as_ref() else {
+        return None;
+    };
+    Some((object.clone(), display_name.clone()))
+}
+
+fn collect_display_name_candidates_in_module_items(items: &[ModuleItem]) -> Vec<(Ident, Str)> {
+    let mut scan = DisplayNameAssignScan::default();
+    items.visit_with(&mut scan);
+    scan.candidates
+}
+
+fn collect_display_name_candidates_in_stmts(stmts: &[Stmt]) -> Vec<(Ident, Str)> {
+    let mut scan = DisplayNameAssignScan::default();
+    stmts.visit_with(&mut scan);
+    scan.candidates
+}
+
+/// Bindings a statement list may rename without leaving a reference behind:
+/// every reference to them sits inside the list. Block-scoped declarations
+/// (`let`, `const`, `class`) qualify at any depth; `var`, function
+/// declarations, and parameters hoist to the nearest function, so at the
+/// list's own level they qualify only when the list is a function body or the
+/// module.
+struct RenamableBindingCollector {
+    ids: HashSet<BindingId>,
+    function_depth: usize,
+    list_is_function_scope: bool,
+}
+
+impl RenamableBindingCollector {
+    fn hoisted_bindings_stay_inside(&self) -> bool {
+        self.list_is_function_scope || self.function_depth > 0
+    }
+
+    fn add_pat(&mut self, pat: &Pat) {
+        let ids: Vec<BindingId> = find_pat_ids(pat);
+        self.ids.extend(ids);
+    }
+}
+
+impl Visit for RenamableBindingCollector {
+    fn visit_var_decl(&mut self, decl: &VarDecl) {
+        if decl.kind != VarDeclKind::Var || self.hoisted_bindings_stay_inside() {
+            for declarator in &decl.decls {
+                self.add_pat(&declarator.name);
+            }
+        }
+        decl.visit_children_with(self);
+    }
+
+    fn visit_fn_decl(&mut self, decl: &swc_core::ecma::ast::FnDecl) {
+        if self.hoisted_bindings_stay_inside() {
+            self.ids.insert((decl.ident.sym.clone(), decl.ident.ctxt));
+        }
+        decl.visit_children_with(self);
+    }
+
+    fn visit_class_decl(&mut self, decl: &swc_core::ecma::ast::ClassDecl) {
+        self.ids.insert((decl.ident.sym.clone(), decl.ident.ctxt));
+        decl.visit_children_with(self);
+    }
+
+    fn visit_import_decl(&mut self, decl: &ImportDecl) {
+        for specifier in &decl.specifiers {
+            let local = match specifier {
+                ImportSpecifier::Named(named) => &named.local,
+                ImportSpecifier::Default(default) => &default.local,
+                ImportSpecifier::Namespace(namespace) => &namespace.local,
+            };
+            self.ids.insert((local.sym.clone(), local.ctxt));
+        }
+    }
+
+    fn visit_catch_clause(&mut self, clause: &swc_core::ecma::ast::CatchClause) {
+        if let Some(param) = &clause.param {
+            self.add_pat(param);
+        }
+        clause.visit_children_with(self);
+    }
+
+    fn visit_function(&mut self, function: &swc_core::ecma::ast::Function) {
+        self.function_depth += 1;
+        for param in &function.params {
+            self.add_pat(&param.pat);
+        }
+        function.visit_children_with(self);
+        self.function_depth -= 1;
+    }
+
+    fn visit_arrow_expr(&mut self, arrow: &ArrowExpr) {
+        self.function_depth += 1;
+        for param in &arrow.params {
+            self.add_pat(param);
+        }
+        arrow.visit_children_with(self);
+        self.function_depth -= 1;
+    }
+}
+
+fn collect_renamable_binding_ids(
+    stmts: &[Stmt],
+    list_is_function_scope: bool,
+) -> HashSet<BindingId> {
+    let mut collector = RenamableBindingCollector {
+        ids: HashSet::new(),
+        function_depth: 0,
+        list_is_function_scope,
+    };
+    stmts.visit_with(&mut collector);
+    collector.ids
 }
 
 fn has_lowercase_jsx_component_calls(
@@ -976,23 +1124,13 @@ fn collect_module_renames(
     unresolved_mark: Mark,
     import_pragmas: &HashMap<BindingId, &'static str>,
 ) -> (Vec<BindingRename>, HashSet<Atom>) {
-    let has_display = has_display_name_candidates(items.iter().filter_map(|i| {
-        if let ModuleItem::Stmt(s) = i {
-            Some(s)
-        } else {
-            None
-        }
-    }));
+    let display_candidates = collect_display_name_candidates_in_module_items(items);
     let has_lc = has_lowercase_jsx_component_calls(items, import_pragmas, unresolved_mark);
-    if !has_display && !has_lc {
+    if display_candidates.is_empty() && !has_lc {
         return (Vec::new(), collect_names_in_module_items(items));
     }
     let mut name_registry = collect_names_in_module_items(items);
-    let mut renames = if has_display {
-        collect_display_name_renames_from_module_items(items, &mut name_registry)
-    } else {
-        Vec::new()
-    };
+    let mut renames = display_name_renames(display_candidates, &mut name_registry);
     if has_lc {
         renames.extend(collect_lowercase_component_renames_from_module_items(
             items,
@@ -1010,18 +1148,15 @@ fn collect_stmt_renames(
     stmts: &[Stmt],
     unresolved_mark: Mark,
     import_pragmas: &HashMap<BindingId, &'static str>,
+    list_is_function_scope: bool,
 ) -> (Vec<BindingRename>, HashSet<Atom>) {
-    let has_display = has_display_name_candidates(stmts.iter());
+    let display_candidates = collect_display_name_candidates_in_stmts(stmts);
     let has_lc = has_lowercase_jsx_component_calls_stmts(stmts, import_pragmas, unresolved_mark);
-    if !has_display && !has_lc {
+    if display_candidates.is_empty() && !has_lc {
         return (Vec::new(), collect_names_in_stmts(stmts));
     }
     let mut name_registry = collect_names_in_stmts(stmts);
-    let mut renames = if has_display {
-        collect_display_name_renames_from_stmts(stmts, &mut name_registry)
-    } else {
-        Vec::new()
-    };
+    let mut renames = display_name_renames(display_candidates, &mut name_registry);
     if has_lc {
         renames.extend(collect_lowercase_component_renames_from_stmts(
             stmts,
@@ -1030,77 +1165,35 @@ fn collect_stmt_renames(
             import_pragmas,
         ));
     }
+    // The renamer only walks this list. A binding declared outside it (a
+    // parameter, or a `let` of the enclosing body when this list is a nested
+    // block) would keep its old name at the declaration and every other use.
+    let renamable = collect_renamable_binding_ids(stmts, list_is_function_scope);
+    renames.retain(|rename| renamable.contains(&rename.old));
     (renames, name_registry)
 }
 
-fn collect_display_name_renames_from_module_items(
-    items: &[ModuleItem],
+fn display_name_renames(
+    candidates: Vec<(Ident, Str)>,
     used_names: &mut HashSet<Atom>,
 ) -> Vec<BindingRename> {
     let mut renames = Vec::new();
-    for item in items {
-        let ModuleItem::Stmt(stmt) = item else {
+    let mut seen = HashSet::new();
+    for (object, display_name) in candidates {
+        let old: BindingId = (object.sym.clone(), object.ctxt);
+        if !seen.insert(old.clone()) {
             continue;
-        };
-        collect_display_name_renames_from_stmt(stmt, used_names, &mut renames);
+        }
+        let new_name = generate_unique_name(
+            used_names,
+            to_valid_identifier_name(&pascalize(&wtf8_to_string(&display_name.value))),
+        );
+        renames.push(BindingRename {
+            old,
+            new: new_name.into(),
+        });
     }
     renames
-}
-
-fn collect_display_name_renames_from_stmts(
-    stmts: &[Stmt],
-    used_names: &mut HashSet<Atom>,
-) -> Vec<BindingRename> {
-    let mut renames = Vec::new();
-    for stmt in stmts {
-        collect_display_name_renames_from_stmt(stmt, used_names, &mut renames);
-    }
-    renames
-}
-
-fn collect_display_name_renames_from_stmt(
-    stmt: &Stmt,
-    used_names: &mut HashSet<Atom>,
-    renames: &mut Vec<BindingRename>,
-) {
-    let Stmt::Expr(expr_stmt) = stmt else {
-        return;
-    };
-    let Expr::Assign(AssignExpr {
-        op: AssignOp::Assign,
-        left,
-        right,
-        ..
-    }) = expr_stmt.expr.as_ref()
-    else {
-        return;
-    };
-    let swc_core::ecma::ast::AssignTarget::Simple(simple) = left else {
-        return;
-    };
-    let swc_core::ecma::ast::SimpleAssignTarget::Member(member) = simple else {
-        return;
-    };
-    let Expr::Ident(object) = member.obj.as_ref() else {
-        return;
-    };
-    let MemberProp::Ident(prop) = &member.prop else {
-        return;
-    };
-    if prop.sym != *"displayName" || object.sym.len() > 2 {
-        return;
-    }
-    let Expr::Lit(Lit::Str(display_name)) = right.as_ref() else {
-        return;
-    };
-    let new_name = generate_unique_name(
-        used_names,
-        to_valid_identifier_name(&pascalize(&wtf8_to_string(&display_name.value))),
-    );
-    renames.push(BindingRename {
-        old: (object.sym.clone(), object.ctxt),
-        new: new_name.into(),
-    });
 }
 
 fn collect_lowercase_component_renames_from_module_items(
