@@ -135,6 +135,16 @@ statement lists needs both overrides (`visit_mut_block_stmt` and
 `visit_mut_function` overrides fire for accessor bodies too. Standalone
 blocks, `catch` clauses, and class static blocks remain `BlockStmt`.
 
+### Object keys are not identifiers
+
+`PropName::Ident` (and `MemberProp::Ident`) hold an `IdentName`, not an
+`Ident`, so `visit_ident` never fires for a plain object key and a visitor
+does not need to skip `PropName` to avoid counting keys as references. An
+empty `visit_prop_name` / `visit_mut_prop_name` override therefore skips only
+`PropName::Computed`, and the expression inside `{ [k]: v }` becomes invisible
+to that visitor. If a visitor overrides `visit_prop_name` at all, descend into
+the computed variant the same way it does for `MemberProp::Computed`.
+
 ### Scope-aware identifier matching
 
 Identifier matching must use resolver identity. For a known global such as

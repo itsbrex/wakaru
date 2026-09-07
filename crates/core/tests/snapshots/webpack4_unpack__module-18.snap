@@ -22,6 +22,7 @@ export function routerReducer(e = s, { type, payload: location } = {}) {
 export class ConnectedRouter extends Component {
     constructor(...i){
         super(...i);
+        var r = this;
         this.handleLocationChange = (payload)=>{
             r.store.dispatch({
                 type: LOCATION_CHANGE,

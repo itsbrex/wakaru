@@ -2202,3 +2202,23 @@ function f(skip, a = -1n) {
 "#;
     assert_eq_normalized(&apply(input), expected);
 }
+
+#[test]
+fn object_property_short_alias_rename_avoids_computed_key_capture() {
+    // `type` is read in a computed key after the destructuring; renaming `n`
+    // to `type` would make that key read the parameter instead.
+    let input = r#"
+function reducer(t = {}) {
+  var n = t.type;
+  return { [type]: n };
+}
+"#;
+    let expected = r#"
+function reducer({ type: n } = {}) {
+  return {
+    [type]: n
+  };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}

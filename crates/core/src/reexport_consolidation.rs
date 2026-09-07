@@ -193,7 +193,11 @@ impl Visit for MemberOnlyAnalyzer<'_> {
         }
     }
 
-    fn visit_prop_name(&mut self, _: &swc_core::ecma::ast::PropName) {}
+    fn visit_prop_name(&mut self, prop: &swc_core::ecma::ast::PropName) {
+        if let swc_core::ecma::ast::PropName::Computed(computed) = prop {
+            computed.visit_with(self);
+        }
+    }
 
     fn visit_member_prop(&mut self, prop: &MemberProp) {
         if let MemberProp::Computed(prop) = prop {

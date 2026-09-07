@@ -57,6 +57,7 @@ const x = (e)=>!!(e.metaKey || e.altKey || e.ctrlKey || e.shiftKey);
 export class Link extends Component {
     constructor(...i_1){
         super(...i_1);
+        var r = this;
         this.handleClick = (e)=>{
             if (r.props.onClick) {
                 r.props.onClick(e);
@@ -441,6 +442,7 @@ const te = ()=>{};
 export class StaticRouter extends Component {
     constructor(...i){
         super(...i);
+        var r = this;
         this.createHref = (e)=>X(r.props.basename + Z(e));
         this.handlePush = (e)=>{
             const r_props = r.props;

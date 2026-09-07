@@ -1642,3 +1642,43 @@ export { o, f };
     let findings = validate_output_modules(&[("input.js".to_string(), output)]);
     assert!(findings.is_empty(), "{findings:#?}");
 }
+
+#[test]
+fn temp_read_in_a_computed_object_key_counts_as_a_use() {
+    // The computed key is the second read of `t`; the declaration must not be
+    // removed on the strength of the first one alone.
+    let input = r#"
+function read(foo) {
+    const t = foo;
+    use(t.value);
+    return { [t.key]: 1 };
+}
+"#;
+    let output = apply(input);
+    assert!(
+        !output.contains("[t.key]") || output.contains("const t = foo"),
+        "{output}"
+    );
+    assert!(
+        output.contains("[foo.key]: 1") || output.contains("const t = foo"),
+        "{output}"
+    );
+}
+
+#[test]
+fn single_read_temp_in_a_computed_object_key_is_inlined() {
+    let input = r#"
+function read(foo) {
+    const t = foo;
+    return { [t.key]: 1 };
+}
+"#;
+    let expected = r#"
+function read(foo) {
+    return {
+        [foo.key]: 1
+    };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}

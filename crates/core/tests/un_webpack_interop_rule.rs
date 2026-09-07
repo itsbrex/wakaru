@@ -474,3 +474,57 @@ var _r = require("./path-to-regexp");
 "#;
     assert_eq_normalized(&render(input), expected.trim());
 }
+
+// ── Computed object keys ───────────────────────────────────────────
+
+#[test]
+fn getter_call_in_computed_object_key_is_inlined() {
+    let input = r#"
+var l = require("./styles.js"), c = () => l && l.__esModule ? l.default : l;
+exports.A = { [c().active]: true, x: c().base };
+"#;
+    let expected = r#"
+var l = require("./styles.js");
+exports.A = {
+    [l.active]: true,
+    x: l.base
+};
+"#;
+    assert_eq_normalized(&render(input), expected.trim());
+}
+
+#[test]
+fn getter_replacement_avoids_shadowing_from_a_computed_key_reference() {
+    let input = r#"
+var r = require("./path-to-regexp");
+var o = () => r && r.__esModule ? r.default : r;
+function compile(pattern) {
+  var r = {};
+  return { [o()(pattern)]: r };
+}
+"#;
+    let expected = r#"
+var _r = require("./path-to-regexp");
+function compile(pattern) {
+  var r = {};
+  return {
+    [_r(pattern)]: r
+  };
+}
+"#;
+    assert_eq_normalized(&render(input), expected.trim());
+}
+
+#[test]
+fn require_t_cached_namespace_used_in_computed_key_not_inlined() {
+    let input = r#"
+let ns;
+const react = require("./react");
+let useId = (ns || (ns = require.t(react, 2))).useId;
+const keys = { [ns.version]: 1 };
+"#;
+    let output = render(input);
+    assert!(output.contains("let ns;"), "{output}");
+    assert!(output.contains("ns = require.t(react, 2)"), "{output}");
+    assert!(output.contains("[ns.version]: 1"), "{output}");
+}

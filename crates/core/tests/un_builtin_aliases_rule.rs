@@ -157,3 +157,18 @@ export { o, f };
 "#;
     assert_eq_normalized(&apply(input), expected);
 }
+
+#[test]
+fn alias_call_inside_a_computed_object_key_is_inlined() {
+    let input = r#"
+const o = Object.keys;
+const m = { [o(x)[0]]: 1 };
+o(y);
+export { m };
+"#;
+    let output = apply(input);
+    assert!(output.contains("[Object.keys(x)[0]]: 1"), "{output}");
+    assert!(output.contains("Object.keys(y);"), "{output}");
+    assert!(!output.contains("const o ="), "{output}");
+    assert!(!output.contains("o(x)"), "{output}");
+}

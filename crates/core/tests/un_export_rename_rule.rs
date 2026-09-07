@@ -872,3 +872,19 @@ export function go() {
 "#;
     assert_eq_normalized(&apply(input), expected);
 }
+
+#[test]
+fn export_rename_is_blocked_by_a_computed_key_reference_in_a_shadowing_scope() {
+    // Like the inner-scope case above, but the only read of `a` inside the
+    // scope that declares `e` sits in a computed object key.
+    let input = r#"
+const a = "TASK";
+export const e = a;
+function j() {
+    let e;
+    return { [a]: e };
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}

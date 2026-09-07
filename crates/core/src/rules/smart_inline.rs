@@ -618,7 +618,11 @@ impl Visit for GlobalIdentCounter<'_> {
             c.visit_with(self);
         }
     }
-    fn visit_prop_name(&mut self, _: &PropName) {}
+    fn visit_prop_name(&mut self, prop: &PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_with(self);
+        }
+    }
 }
 
 /// Replaces direct call callee usages everywhere, including inside nested functions/arrows.
@@ -643,7 +647,11 @@ impl VisitMut for GlobalIdentInliner<'_> {
             c.visit_mut_with(self);
         }
     }
-    fn visit_mut_prop_name(&mut self, _: &mut PropName) {}
+    fn visit_mut_prop_name(&mut self, prop: &mut PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_mut_with(self);
+        }
+    }
     // NOTE: intentionally does NOT stop at function/arrow/class boundaries
 }
 
@@ -987,7 +995,11 @@ impl Visit for AssignmentAliasUsageCollector<'_> {
         }
     }
 
-    fn visit_prop_name(&mut self, _: &PropName) {}
+    fn visit_prop_name(&mut self, prop: &PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_with(self);
+        }
+    }
 }
 
 fn is_simple_expr(expr: &Expr) -> bool {
@@ -1209,7 +1221,11 @@ impl Visit for SourceBindingCollector<'_> {
             c.visit_with(self);
         }
     }
-    fn visit_prop_name(&mut self, _: &PropName) {}
+    fn visit_prop_name(&mut self, prop: &PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_with(self);
+        }
+    }
 }
 
 struct DifferentContextSameNameFinder<'a> {
@@ -1335,7 +1351,11 @@ impl Visit for TempUsageCollector<'_> {
             c.visit_with(self);
         }
     }
-    fn visit_prop_name(&mut self, _: &PropName) {}
+    fn visit_prop_name(&mut self, prop: &PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_with(self);
+        }
+    }
 }
 
 impl TempUsageCollector<'_> {
@@ -1532,7 +1552,11 @@ impl Visit for NestedTempCollector<'_> {
         }
     }
 
-    fn visit_prop_name(&mut self, _: &PropName) {}
+    fn visit_prop_name(&mut self, prop: &PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_with(self);
+        }
+    }
 }
 
 struct IdentInliner<'a> {
@@ -1557,7 +1581,11 @@ impl VisitMut for IdentInliner<'_> {
             c.visit_mut_with(self);
         }
     }
-    fn visit_mut_prop_name(&mut self, _: &mut PropName) {}
+    fn visit_mut_prop_name(&mut self, prop: &mut PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_mut_with(self);
+        }
+    }
     // Don't inline inside nested functions (would change closure semantics)
     fn visit_mut_function(&mut self, _: &mut swc_core::ecma::ast::Function) {}
     fn visit_mut_arrow_expr(&mut self, _: &mut swc_core::ecma::ast::ArrowExpr) {}
@@ -2142,7 +2170,11 @@ fn ident_is_referenced_in_stmts(id: &Ident, stmts: &[Stmt]) -> bool {
             }
         }
 
-        fn visit_prop_name(&mut self, _: &PropName) {}
+        fn visit_prop_name(&mut self, prop: &PropName) {
+            if let PropName::Computed(computed) = prop {
+                computed.visit_with(self);
+            }
+        }
     }
 
     let mut finder = IdentRefFinder {

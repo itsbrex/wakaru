@@ -348,7 +348,11 @@ impl RenameShadowIndex {
                 self.pop_scope();
             }
 
-            fn visit_prop_name(&mut self, _: &PropName) {}
+            fn visit_prop_name(&mut self, prop: &PropName) {
+                if let PropName::Computed(computed) = prop {
+                    computed.visit_with(self);
+                }
+            }
 
             fn visit_member_prop(&mut self, prop: &MemberProp) {
                 if let MemberProp::Computed(computed) = prop {
@@ -687,7 +691,11 @@ pub fn binding_replacement_would_be_shadowed(
             }
         }
 
-        fn visit_prop_name(&mut self, _: &PropName) {}
+        fn visit_prop_name(&mut self, prop: &PropName) {
+            if let PropName::Computed(computed) = prop {
+                computed.visit_with(self);
+            }
+        }
 
         fn visit_member_prop(&mut self, prop: &MemberProp) {
             if let MemberProp::Computed(computed) = prop {
@@ -769,7 +777,11 @@ fn block_binds_name(stmts: &[Stmt], name: &Atom) -> bool {
 
         fn visit_arrow_expr(&mut self, _: &ArrowExpr) {}
 
-        fn visit_prop_name(&mut self, _: &PropName) {}
+        fn visit_prop_name(&mut self, prop: &PropName) {
+            if let PropName::Computed(computed) = prop {
+                computed.visit_with(self);
+            }
+        }
 
         fn visit_member_prop(&mut self, prop: &MemberProp) {
             if let MemberProp::Computed(prop) = prop {

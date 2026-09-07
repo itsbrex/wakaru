@@ -447,7 +447,11 @@ impl Visit for BuiltinAliasUsageCounter<'_> {
         }
     }
 
-    fn visit_prop_name(&mut self, _: &PropName) {}
+    fn visit_prop_name(&mut self, prop: &PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_with(self);
+        }
+    }
 }
 
 struct BuiltinAliasInliner<'a> {
@@ -479,7 +483,11 @@ impl VisitMut for BuiltinAliasInliner<'_> {
         }
     }
 
-    fn visit_mut_prop_name(&mut self, _: &mut PropName) {}
+    fn visit_mut_prop_name(&mut self, prop: &mut PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_mut_with(self);
+        }
+    }
 }
 
 fn set_expr_span(expr: &mut Expr, span: Span) {

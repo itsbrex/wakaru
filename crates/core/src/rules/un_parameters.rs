@@ -2821,7 +2821,11 @@ impl Visit for EmittedIdentNameFinder2<'_> {
         }
     }
 
-    fn visit_prop_name(&mut self, _: &PropName) {}
+    fn visit_prop_name(&mut self, prop: &PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_with(self);
+        }
+    }
 
     fn visit_member_prop(&mut self, prop: &MemberProp) {
         if let MemberProp::Computed(computed) = prop {

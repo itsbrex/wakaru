@@ -2948,5 +2948,9 @@ impl Visit for IdentUseFinder {
         }
     }
 
-    fn visit_prop_name(&mut self, _: &PropName) {}
+    fn visit_prop_name(&mut self, prop: &PropName) {
+        if let PropName::Computed(computed) = prop {
+            computed.visit_with(self);
+        }
+    }
 }

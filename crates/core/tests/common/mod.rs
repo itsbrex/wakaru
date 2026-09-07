@@ -226,7 +226,8 @@ pub fn assert_eq_normalized(actual: &str, expected: &str) {
     assert_eq!(normalize(actual), normalize(expected));
 }
 
-fn parse_module_with_filename(code: &str, filename: &str, cm: Lrc<SourceMap>) -> Module {
+#[allow(dead_code)]
+pub fn parse_module_with_filename(code: &str, filename: &str, cm: Lrc<SourceMap>) -> Module {
     let fm = cm.new_source_file(
         FileName::Custom(filename.to_string()).into(),
         code.to_string(),
@@ -254,7 +255,8 @@ fn parse_module_with_filename(code: &str, filename: &str, cm: Lrc<SourceMap>) ->
         .expect("failed to parse module for normalization")
 }
 
-fn emit_module(module: &Module, cm: Lrc<SourceMap>) -> String {
+#[allow(dead_code)]
+pub fn emit_module(module: &Module, cm: Lrc<SourceMap>) -> String {
     let mut output = Vec::new();
     {
         let mut emitter = Emitter {

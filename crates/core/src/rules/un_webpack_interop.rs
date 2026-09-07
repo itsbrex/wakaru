@@ -412,7 +412,11 @@ fn collect_binding_refs(module: &Module, targets: &HashSet<BindingKey>) -> HashS
 
         fn visit_binding_ident(&mut self, _: &BindingIdent) {}
 
-        fn visit_prop_name(&mut self, _: &swc_core::ecma::ast::PropName) {}
+        fn visit_prop_name(&mut self, prop: &swc_core::ecma::ast::PropName) {
+            if let swc_core::ecma::ast::PropName::Computed(computed) = prop {
+                computed.visit_with(self);
+            }
+        }
     }
 
     let mut collector = RefCollector {
@@ -442,7 +446,11 @@ fn collect_binding_ref_counts(module: &Module) -> HashMap<BindingKey, usize> {
 
         fn visit_binding_ident(&mut self, _: &BindingIdent) {}
 
-        fn visit_prop_name(&mut self, _: &swc_core::ecma::ast::PropName) {}
+        fn visit_prop_name(&mut self, prop: &swc_core::ecma::ast::PropName) {
+            if let swc_core::ecma::ast::PropName::Computed(computed) = prop {
+                computed.visit_with(self);
+            }
+        }
     }
 
     let mut counter = RefCounter {
@@ -467,7 +475,11 @@ fn count_binding_refs_in_expr(expr: &Expr, target: &BindingKey) -> usize {
 
         fn visit_binding_ident(&mut self, _: &BindingIdent) {}
 
-        fn visit_prop_name(&mut self, _: &swc_core::ecma::ast::PropName) {}
+        fn visit_prop_name(&mut self, prop: &swc_core::ecma::ast::PropName) {
+            if let swc_core::ecma::ast::PropName::Computed(computed) = prop {
+                computed.visit_with(self);
+            }
+        }
     }
 
     let mut counter = RefCounter { target, refs: 0 };
@@ -765,7 +777,11 @@ impl Visit for GetterUsageCollector<'_> {
         self.mark_unsupported(ident);
     }
 
-    fn visit_prop_name(&mut self, _: &swc_core::ecma::ast::PropName) {}
+    fn visit_prop_name(&mut self, prop: &swc_core::ecma::ast::PropName) {
+        if let swc_core::ecma::ast::PropName::Computed(computed) = prop {
+            computed.visit_with(self);
+        }
+    }
 
     fn visit_member_prop(&mut self, prop: &MemberProp) {
         if let MemberProp::Computed(prop) = prop {
@@ -813,7 +829,11 @@ impl VisitMut for GetterReplacer<'_> {
         }
     }
 
-    fn visit_mut_prop_name(&mut self, _: &mut swc_core::ecma::ast::PropName) {}
+    fn visit_mut_prop_name(&mut self, prop: &mut swc_core::ecma::ast::PropName) {
+        if let swc_core::ecma::ast::PropName::Computed(computed) = prop {
+            computed.visit_mut_with(self);
+        }
+    }
 
     fn visit_mut_member_prop(&mut self, prop: &mut MemberProp) {
         if let MemberProp::Computed(prop) = prop {
@@ -862,7 +882,11 @@ impl VisitMut for WebpackNamespaceReplacer<'_> {
         }
     }
 
-    fn visit_mut_prop_name(&mut self, _: &mut swc_core::ecma::ast::PropName) {}
+    fn visit_mut_prop_name(&mut self, prop: &mut swc_core::ecma::ast::PropName) {
+        if let swc_core::ecma::ast::PropName::Computed(computed) = prop {
+            computed.visit_mut_with(self);
+        }
+    }
 }
 
 struct WebpackHasOwnReplacer {

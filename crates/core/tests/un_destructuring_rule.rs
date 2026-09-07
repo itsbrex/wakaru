@@ -1274,3 +1274,14 @@ fn pipeline_keeps_reassigned_inline_sliced_helper_with_default_pattern() {
     let output = render_pipeline_until_with_level(input, "UnDestructuring", RewriteLevel::Standard);
     assert!(output.contains("= _slicedToArray(items, 2)"), "{output}");
 }
+
+#[test]
+fn rejects_default_whose_temp_is_read_in_a_later_computed_key() {
+    let input = r#"
+var _ref = opts;
+var _tmp = _ref.foo;
+var foo = _tmp === void 0 ? 1 : _tmp;
+var keys = { [_tmp]: foo };
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
