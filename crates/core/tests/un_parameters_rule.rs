@@ -5,7 +5,7 @@ use swc_core::common::{sync::Lrc, FileName, Mark, SourceMap, SyntaxContext, GLOB
 use swc_core::ecma::ast::{BindingIdent, Decl, EsVersion, Function, ModuleItem, Pat, Stmt};
 use swc_core::ecma::parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax};
 use swc_core::ecma::transforms::base::resolver;
-use swc_core::ecma::visit::VisitMutWith;
+use swc_core::ecma::visit::{Visit, VisitMutWith, VisitWith};
 use wakaru_core::{rules::UnParameters, RewriteLevel};
 
 fn apply(input: &str) -> String {
@@ -1568,6 +1568,94 @@ function greet() {
         SyntaxContext::empty(),
         "regression input should use a scoped local binding"
     );
+}
+
+#[test]
+fn placeholder_param_declaration_and_references_share_one_context() {
+    // No body declaration names the second argument, so the rule invents
+    // `_param_1`. Both reads must resolve to the one parameter it declares:
+    // a reference with a different context would be invisible to every later
+    // `(sym, ctxt)`-keyed pass, and a rename of the parameter would leave it
+    // behind as a free name.
+    let input = r#"
+function foo(a) {
+  use(arguments.length > 1 ? arguments[1] : void 0);
+  use(arguments.length > 1 ? arguments[1] : void 0);
+  return a;
+}
+"#;
+    let expected = r#"
+function foo(a, _param_1) {
+  use(_param_1);
+  use(_param_1);
+  return a;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+
+    let ctxts = ident_contexts_after_rule(input, "_param_1");
+    assert_eq!(
+        ctxts.len(),
+        3,
+        "one declaration and two references: {ctxts:?}"
+    );
+    assert!(
+        ctxts.iter().all(|ctxt| *ctxt == ctxts[0]),
+        "declaration and references must share one context: {ctxts:?}"
+    );
+    assert_ne!(ctxts[0], SyntaxContext::empty());
+}
+
+fn ident_contexts_after_rule(input: &str, name: &str) -> Vec<SyntaxContext> {
+    struct Contexts<'a> {
+        name: &'a str,
+        found: Vec<SyntaxContext>,
+    }
+    impl Visit for Contexts<'_> {
+        fn visit_ident(&mut self, ident: &swc_core::ecma::ast::Ident) {
+            if ident.sym == self.name {
+                self.found.push(ident.ctxt);
+            }
+        }
+    }
+
+    GLOBALS.set(&Default::default(), || {
+        let mut module = parse_and_resolve(input);
+        let unresolved_mark = module.1;
+        module.0.visit_mut_with(&mut UnParameters::new(
+            unresolved_mark,
+            RewriteLevel::Standard,
+        ));
+        let mut contexts = Contexts {
+            name,
+            found: Vec::new(),
+        };
+        module.0.visit_with(&mut contexts);
+        contexts.found
+    })
+}
+
+fn parse_and_resolve(input: &str) -> (swc_core::ecma::ast::Module, Mark) {
+    let cm: Lrc<SourceMap> = Default::default();
+    let fm = cm.new_source_file(
+        FileName::Custom("fixture.js".to_string()).into(),
+        input.to_string(),
+    );
+    let lexer = Lexer::new(
+        Syntax::Es(EsSyntax {
+            jsx: true,
+            ..Default::default()
+        }),
+        EsVersion::latest(),
+        StringInput::from(&*fm),
+        None,
+    );
+    let mut parser = Parser::new_from(lexer);
+    let mut module = parser.parse_module().expect("input should parse");
+    let unresolved_mark = Mark::new();
+    let top_level_mark = Mark::new();
+    module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+    (module, unresolved_mark)
 }
 
 fn recovered_first_param_context(input: &str) -> (SyntaxContext, SyntaxContext) {

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
@@ -3374,6 +3376,7 @@ fn rewrite_inline_arguments_defaults(
         body_bindings,
         param_name_candidates,
         consumed_param_name_bindings: Vec::new(),
+        placeholder_idents: HashMap::new(),
     };
     body.visit_mut_with(&mut rewriter);
     remove_consumed_empty_param_name_decls(body, &rewriter.consumed_param_name_bindings);
@@ -3477,6 +3480,10 @@ struct InlineArgumentsDefaultRewriter<'a> {
     body_bindings: &'a [BindingId],
     param_name_candidates: Vec<Option<InlineParamNameCandidate>>,
     consumed_param_name_bindings: Vec<BindingId>,
+    /// The invented `_param_N` identifier per slot. Every read of the same
+    /// slot and the parameter it declares must share one context, so the
+    /// identifier is created once and cloned afterwards.
+    placeholder_idents: HashMap<usize, Ident>,
 }
 
 impl VisitMut for InlineArgumentsDefaultRewriter<'_> {
@@ -3528,10 +3535,14 @@ impl VisitMut for InlineArgumentsDefaultRewriter<'_> {
 }
 
 impl InlineArgumentsDefaultRewriter<'_> {
-    fn preferred_param_ident(&self, idx: usize) -> Ident {
-        self.param_name_candidate(idx)
-            .map(|candidate| candidate.ident.clone())
-            .unwrap_or_else(|| fresh_binding_ident(placeholder_name(idx), DUMMY_SP))
+    fn preferred_param_ident(&mut self, idx: usize) -> Ident {
+        if let Some(candidate) = self.param_name_candidate(idx) {
+            return candidate.ident.clone();
+        }
+        self.placeholder_idents
+            .entry(idx)
+            .or_insert_with(|| fresh_binding_ident(placeholder_name(idx), DUMMY_SP))
+            .clone()
     }
 
     fn mark_param_name_consumed(&mut self, idx: usize) {
