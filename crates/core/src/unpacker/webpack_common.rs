@@ -21,7 +21,9 @@ use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 use super::emit_esm::{dedup_filename, FilenameDedupStyle};
 use crate::analysis::binding_uses::{BindingId, BindingUseIndex, UseKind};
 use crate::module_path::relative_import_specifier;
-use crate::rules::rename_utils::{collect_module_names, rename_bindings_in_module, BindingRename};
+use crate::rules::rename_utils::{
+    collect_free_reference_names, collect_module_names, rename_bindings_in_module, BindingRename,
+};
 use crate::utils::paren::{strip_parens, strip_parens_mut};
 
 const JAVASCRIPT_LIKE_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "jsx", "ts", "tsx", "mts", "cts"];
@@ -367,7 +369,11 @@ pub(super) fn localize_reused_runtime_parameter(
     }
 
     let mut candidate = module.clone();
+    // Names the invented local must not take: everything the module declares
+    // and every name it references as a global. A local spelled like a free
+    // reference would capture that reference after printing.
     let mut used_names = collect_module_names(&candidate);
+    used_names.extend(collect_free_reference_names(&candidate, unresolved_mark));
     let local_name = fresh_runtime_value_name(parameter, &mut used_names);
     let local = Ident::new(local_name.clone(), DUMMY_SP, target.1);
 

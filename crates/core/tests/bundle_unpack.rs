@@ -741,6 +741,66 @@ fn webpack4_reused_exports_parameter_preserves_the_runtime_export_lifetime() {
 }
 
 #[test]
+fn webpack5_localized_runtime_parameter_avoids_a_free_global_reference() {
+    // Same alias chain as the Ajv test, but the module also references a
+    // global spelled like the local the unpacker would invent (`_publicValue`).
+    // Introducing `let _publicValue` would capture that reference after
+    // printing, so the local must take the next free spelling.
+    let source = r#"
+(() => {
+  var modules = ({
+    0: ((context, publicValue) => {
+      Object.defineProperty(publicValue, "__esModule", { value: true });
+      publicValue.SchemaEnv = void 0;
+      class Ajv {}
+      _publicValue.track("ajv");
+      (publicValue.Ajv = Ajv,
+       context.exports = publicValue = Ajv,
+       context.exports.Ajv = Ajv,
+       Object.defineProperty(publicValue, "__esModule", { value: true }),
+       publicValue.default = Ajv);
+      globalThis.observed = publicValue.Ajv === Ajv;
+    })
+  });
+  var cache = {};
+  (function load(id) {
+    var module = cache[id] = { exports: {} };
+    modules[id](module, module.exports, load);
+    return module.exports;
+  })(0);
+})();
+"#;
+
+    let output = unpack(
+        source,
+        DecompileOptions {
+            filename: "webpack5-ajv-exports-alias-free-global.js".to_string(),
+            ..Default::default()
+        },
+    )
+    .expect("the alias chain should still unpack");
+
+    let module = output
+        .modules
+        .iter()
+        .find(|(filename, _)| filename == "module-0.js")
+        .map(|(_, code)| code)
+        .expect("expected recovered module");
+    assert!(
+        module.contains("_publicValue.track(\"ajv\")"),
+        "the free global reference must survive untouched:\n{module}"
+    );
+    assert!(
+        module.contains("let _publicValue_2;") && module.contains("_publicValue_2 = Ajv"),
+        "the invented local must not take the spelling of a free global:\n{module}"
+    );
+    assert!(
+        !module.contains("let _publicValue;"),
+        "no local may shadow the free `_publicValue` reference:\n{module}"
+    );
+}
+
+#[test]
 fn webpack5_reused_exports_parameter_in_commonjs_alias_chain_is_localized() {
     // Ajv 8.20.0 authors this compatibility bridge before TypeScript and
     // webpack lower/minify it: `module.exports = exports = Ajv`. The exports
