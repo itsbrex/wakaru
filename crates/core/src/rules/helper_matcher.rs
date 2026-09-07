@@ -221,18 +221,19 @@ pub(crate) fn remove_import_specifiers_by_binding(
     body: &mut Vec<ModuleItem>,
     removable: &HashSet<BindingKey>,
 ) {
-    for item in body.iter_mut() {
-        let ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import)) = item else {
-            continue;
-        };
-        import
-            .specifiers
-            .retain(|specifier| !removable.contains(&import_specifier_binding_key(specifier)));
-    }
-    body.retain(|item| {
+    // An import that loses its last specifier here goes with it. A bare
+    // `import "./side.js"` never had one and is a side effect the module
+    // depends on; it stays.
+    body.retain_mut(|item| {
         let ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import)) = item else {
             return true;
         };
+        if import.specifiers.is_empty() {
+            return true;
+        }
+        import
+            .specifiers
+            .retain(|specifier| !removable.contains(&import_specifier_binding_key(specifier)));
         !import.specifiers.is_empty()
     });
 }

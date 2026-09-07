@@ -93,6 +93,13 @@ uses, rewrite call sites, or remove consumed declarations. This keeps the common
 scope-sensitive lifecycle code in one place while leaving each rule's semantic
 matching local to that rule.
 
+Two removal rules hold for every caller. `remove_helpers_without_remaining_refs`
+iterates: a helper the module still references stays, and so does every helper
+it references, because references inside a kept declaration count. Import
+cleanup drops only an import that lost its last specifier; a bare
+`import "./side.js"` is a side effect the module depends on and is never
+removed by helper cleanup.
+
 ### Rule-local matching
 
 Rules still own domain-specific shape recognition. For example:

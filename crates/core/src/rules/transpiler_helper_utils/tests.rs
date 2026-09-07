@@ -316,6 +316,75 @@ fn removes_helper_dependencies_with_consumed_root() {
 }
 
 #[test]
+fn keeps_dependency_of_a_helper_that_stays_referenced() {
+    GLOBALS.set(&Globals::new(), || {
+        let mut module = parse_module(
+            r#"
+                function root(value) {
+                    return shared(value);
+                }
+                function shared(value) {
+                    return leaf(value);
+                }
+                function leaf(value) {
+                    return value;
+                }
+                function survivor(value) {
+                    return shared(value);
+                }
+                survivor(1);
+                "#,
+        );
+        let context = LocalHelperContext::collect(&module);
+        let roots = HashMap::from([(
+            (Atom::from("root"), SyntaxContext::empty()),
+            TranspilerHelperKind::SlicedToArray,
+        )]);
+
+        context.remove_helpers_with_dependencies(&mut module, roots);
+
+        assert!(!module_has_function(&module, "root"));
+        // `shared` is still called by `survivor`, so `leaf`, which only
+        // `shared` calls, must stay with it.
+        assert!(module_has_function(&module, "shared"));
+        assert!(module_has_function(&module, "leaf"));
+        assert!(module_has_function(&module, "survivor"));
+    });
+}
+
+#[test]
+fn removing_helper_imports_keeps_side_effect_imports() {
+    GLOBALS.set(&Globals::new(), || {
+        let mut module = parse_module(
+            r#"
+                import "./side.js";
+                import helper from "@babel/runtime/helpers/defineProperty";
+                import "./other.css";
+                "#,
+        );
+        let helpers = HashMap::from([(
+            (Atom::from("helper"), SyntaxContext::empty()),
+            TranspilerHelperKind::DefineProperty,
+        )]);
+
+        remove_helpers_without_remaining_refs(&mut module, helpers);
+
+        assert!(!module_has_import_local(&module, "helper"));
+        let bare_imports = module
+            .body
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    ModuleItem::ModuleDecl(ModuleDecl::Import(import)) if import.specifiers.is_empty()
+                )
+            })
+            .count();
+        assert_eq!(bare_imports, 2);
+    });
+}
+
+#[test]
 fn removes_unused_inline_ts_helpers_by_kind() {
     GLOBALS.set(&Globals::new(), || {
             let mut module = parse_module(

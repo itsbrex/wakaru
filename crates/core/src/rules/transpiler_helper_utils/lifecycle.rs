@@ -18,17 +18,24 @@ pub(crate) fn helpers_with_remaining_refs(
     let helper_keys: HashSet<_> = helpers.keys().cloned().collect();
     remaining_refs_outside_declarations(module, &helper_keys, &helper_keys)
 }
+/// Remove the helpers in `helpers` that nothing outside the set references.
+/// A helper the module still references stays, and so does everything it
+/// references: its declaration is no longer one of the removed ones, so the
+/// references inside it count. That is why the check iterates until the set
+/// stops shrinking instead of judging every helper against the initial set.
 pub(crate) fn remove_helpers_without_remaining_refs(
     module: &mut Module,
-    helpers: HashMap<BindingKey, TranspilerHelperKind>,
+    mut helpers: HashMap<BindingKey, TranspilerHelperKind>,
 ) {
-    let remaining = helpers_with_remaining_refs(module, &helpers);
-    let safe_to_remove: HashMap<BindingKey, TranspilerHelperKind> = helpers
-        .into_iter()
-        .filter(|(key, _)| !remaining.contains(key))
-        .collect();
-    if !safe_to_remove.is_empty() {
-        remove_helper_declarations(&mut module.body, &safe_to_remove);
+    loop {
+        let remaining = helpers_with_remaining_refs(module, &helpers);
+        if remaining.is_empty() {
+            break;
+        }
+        helpers.retain(|key, _| !remaining.contains(key));
+    }
+    if !helpers.is_empty() {
+        remove_helper_declarations(&mut module.body, &helpers);
     }
 }
 pub(super) fn helper_dependencies_from_ref_graph(
