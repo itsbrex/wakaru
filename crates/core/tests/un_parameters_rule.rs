@@ -2222,3 +2222,67 @@ function reducer({ type: n } = {}) {
 "#;
     assert_eq_normalized(&apply(input), expected);
 }
+
+#[test]
+fn property_alias_read_by_a_later_param_default_stays_in_body() {
+    // `n = e.currentTarget` reads the parameter the fold would replace with a
+    // destructuring pattern; a default cannot see the body, so `e` would dangle.
+    let input = r#"
+function capture(e, t, n = e.currentTarget) {
+  let r = e.nativeEvent;
+  return use(r, t, n);
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn destructuring_alias_read_by_a_later_param_default_stays_in_body() {
+    let input = r#"
+function capture(e, t, n = e.currentTarget) {
+  let { nativeEvent } = e;
+  return use(nativeEvent, t, n);
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn array_index_alias_read_by_a_later_param_default_stays_in_body() {
+    let input = r#"
+function capture(e, n = e.length) {
+  let first = e[0];
+  let second = e[1];
+  return use(first, second, n);
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn arrow_destructuring_alias_read_by_a_later_param_default_stays_in_body() {
+    let input = r#"
+const capture = (e, t, n = e.currentTarget) => {
+  let { nativeEvent } = e;
+  return use(nativeEvent, t, n);
+};
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn reassignment_default_on_a_binding_read_by_a_later_param_default_stays_in_body() {
+    // Babel 7.8 reassignment default on a destructured binding. The sibling
+    // default reads `_ref$outer` before the body reassignment runs, so the
+    // default cannot move into the pattern, and folding the property read into
+    // a nested pattern would remove the binding that default reads.
+    let input = r#"
+function nested({ outer: _ref$outer } = {}, mode = _ref$outer.mode) {
+  _ref$outer = _ref$outer === undefined ? {} : _ref$outer;
+  let _ref$outer$value = _ref$outer.value;
+  let value = _ref$outer$value === undefined ? fallbackValue : _ref$outer$value;
+  return use(value, mode);
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}

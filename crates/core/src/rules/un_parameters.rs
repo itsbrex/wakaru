@@ -1403,6 +1403,7 @@ fn fold_destructured_param_aliases(
                 &body.stmts[destructuring_idx + 1..],
             )
             || stmts_reference_ident(&body.stmts[destructuring_idx + 1..], &alias)
+            || params_reference_ident(&*params, &alias)
             || destructured_pat_reuses_other_param_name(&destructured_pat, params, param_idx)
             || !replace_param_alias_pat(
                 &mut params[param_idx].pat,
@@ -1451,6 +1452,13 @@ fn promote_destructured_binding_defaults(
         };
 
         if !any_param_contains_destructured_binding(params, &binding) {
+            continue;
+        }
+        // A sibling default that reads the binding observes it before the
+        // body reassignment runs; promoting the default into the pattern
+        // would change what that read sees, and folding property reads into
+        // a nested pattern would remove the binding it reads.
+        if params_reference_ident(&*params, &binding) {
             continue;
         }
 
@@ -1684,6 +1692,7 @@ fn fold_object_property_param_aliases(
                 &body.stmts[remove_count..],
             )
             || stmts_reference_ident(&body.stmts[remove_count..], &alias)
+            || params_reference_ident(&*params, &alias)
             || destructured_pat_reuses_other_param_name(&destructured_pat, params, param_idx)
             || !replace_param_alias_pat(
                 &mut params[param_idx].pat,
@@ -1720,6 +1729,7 @@ fn fold_array_index_param_aliases(
                 &body.stmts[remove_count..],
             )
             || stmts_reference_ident(&body.stmts[remove_count..], &alias)
+            || params_reference_ident(&*params, &alias)
             || destructured_pat_reuses_other_param_name(&destructured_pat, params, param_idx)
             || !replace_param_alias_pat(
                 &mut params[param_idx].pat,
@@ -1756,6 +1766,7 @@ fn fold_destructured_arrow_param_aliases(
             || destructured_pat_has_minified_alias(&destructured_pat)
             || destructured_pat_references_later_decl_name(&destructured_pat, &body.stmts[1..])
             || stmts_reference_ident(&body.stmts[1..], &alias)
+            || params_reference_ident(&*params, &alias)
             || destructured_pat_reuses_other_arrow_param_name(&destructured_pat, params, param_idx)
             || !replace_param_alias_pat(
                 &mut params[param_idx],
@@ -3030,6 +3041,37 @@ fn stmts_reference_ident(stmts: &[Stmt], alias: &Ident) -> bool {
     };
     stmts.visit_with(&mut visitor);
     visitor.found
+}
+
+/// Whether a parameter default or computed pattern key reads `alias`.
+/// Defaults evaluate in the parameter scope, so a body declaration can never
+/// stand in for a parameter they read; binding positions are not reads.
+fn params_reference_ident<P>(params: &P, alias: &Ident) -> bool
+where
+    P: ?Sized,
+    for<'a> P: VisitWith<ParamValueReferenceFinder<'a>>,
+{
+    let mut visitor = ParamValueReferenceFinder {
+        alias,
+        found: false,
+    };
+    params.visit_with(&mut visitor);
+    visitor.found
+}
+
+struct ParamValueReferenceFinder<'a> {
+    alias: &'a Ident,
+    found: bool,
+}
+
+impl Visit for ParamValueReferenceFinder<'_> {
+    fn visit_binding_ident(&mut self, _: &BindingIdent) {}
+
+    fn visit_ident(&mut self, ident: &Ident) {
+        if same_ident(ident, self.alias) {
+            self.found = true;
+        }
+    }
 }
 
 fn expr_references_ident(expr: &Expr, alias: &Ident) -> bool {
