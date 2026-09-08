@@ -3025,3 +3025,60 @@ async function load_resource(loader, path, options) {
     let findings = validate_output_modules(&[("input.js".to_string(), output)]);
     assert!(findings.is_empty(), "{findings:#?}");
 }
+
+// ── Inline `__values` detection must not swallow user functions ─────────────
+
+#[test]
+fn one_param_function_with_a_nested_iterable_helper_is_not_a_values_helper() {
+    // A single-parameter user function whose body contains an inlined Babel
+    // iterable helper (`Symbol.iterator`) and a `TypeError` throw shares the
+    // `__values` signals only inside nested functions. It is not a helper and
+    // must survive even when nothing references it: dead input code is kept.
+    let input = r#"
+var C = function(r) {
+  var t = r.reason.stack;
+  if (t) {
+    var o = function(r) {
+      var n = r == null ? null : typeof Symbol !== "undefined" && r[Symbol.iterator] || r["@@iterator"];
+      if (n != null) return n.call(r);
+    }(t.match(E)) || function() {
+      throw new TypeError("Invalid attempt to destructure non-iterable instance.");
+    }();
+    report(o);
+  }
+};
+"#;
+    assert_eq_normalized(&apply_without_helpers(input), input);
+}
+
+#[test]
+fn function_referenced_only_inside_another_misclassified_function_survives() {
+    // Bench shape: `C` and `R` both carry the loose `__values` signals through
+    // nested inlined helpers. `C` is only referenced inside `R`'s initializer;
+    // `R` stays because the module calls it, so `C` must stay as well.
+    let input = r#"
+var C = function(r) {
+  var t = r.reason.stack;
+  if (t) {
+    var o = function(r) {
+      var n = r == null ? null : typeof Symbol !== "undefined" && r[Symbol.iterator] || r["@@iterator"];
+      if (n != null) return n.call(r);
+    }(t.match(E)) || function() {
+      throw new TypeError("Invalid attempt to destructure non-iterable instance.");
+    }();
+    report(o);
+  }
+};
+var R = (r) => {
+  var items = function(r) {
+    if (typeof Symbol !== "undefined" && r[Symbol.iterator] != null) return Array.from(r);
+  }(r) || function() {
+    throw new TypeError("Invalid attempt to spread non-iterable instance.");
+  }();
+  window.addEventListener("unhandledrejection", C);
+  return items;
+};
+R([]);
+"#;
+    assert_eq_normalized(&apply_without_helpers(input), input);
+}

@@ -9,9 +9,9 @@ use std::collections::{HashMap, HashSet};
 
 use swc_core::common::Mark;
 use swc_core::ecma::ast::{
-    ArrowFunctionBody, AssignExpr, BinExpr, BinaryOp, CallExpr, Callee, Decl, Expr, Function,
-    Ident, ImportSpecifier, Lit, MemberExpr, MemberProp, Module, ModuleDecl, ModuleItem, Pat,
-    PropName, Stmt, VarDeclarator,
+    ArrowExpr, ArrowFunctionBody, AssignExpr, BinExpr, BinaryOp, CallExpr, Callee, Decl, Expr,
+    Function, Ident, ImportSpecifier, Lit, MemberExpr, MemberProp, Module, ModuleDecl, ModuleItem,
+    Pat, PropName, Stmt, VarDeclarator,
 };
 use swc_core::ecma::visit::{Visit, VisitWith};
 
@@ -658,9 +658,7 @@ fn ts_inline_helper_fallback_matches(expr: &Expr, kind: TsHelperKind) -> bool {
         TsHelperKind::Generator => {
             param_len >= 2 && (signals.label_prop || signals.trys_prop || signals.ops_prop)
         }
-        // `__values` / `_ts_values`: single iterable param, grabs `Symbol.iterator`,
-        // throws `TypeError` when the value is not iterable.
-        TsHelperKind::Values => param_len == 1 && signals.symbol_iterator && signals.type_error,
+        TsHelperKind::Values => ts_values_body_matches(param_len, body),
         TsHelperKind::Assign => {
             signals.object_assign || (signals.arguments_ref && signals.has_own_property)
         }
@@ -739,11 +737,32 @@ struct TsHelperBodySignals {
     type_error: bool,
 }
 fn collect_ts_helper_body_signals(stmts: &[Stmt]) -> TsHelperBodySignals {
+    collect_ts_helper_signals(stmts, true)
+}
+/// Signals from the helper's own statements only; nested functions and arrows
+/// are not entered.
+fn collect_ts_helper_own_body_signals(stmts: &[Stmt]) -> TsHelperBodySignals {
+    collect_ts_helper_signals(stmts, false)
+}
+fn collect_ts_helper_signals(stmts: &[Stmt], descend_into_functions: bool) -> TsHelperBodySignals {
     struct SignalVisitor {
         signals: TsHelperBodySignals,
+        descend_into_functions: bool,
     }
 
     impl Visit for SignalVisitor {
+        fn visit_function(&mut self, function: &Function) {
+            if self.descend_into_functions {
+                function.visit_children_with(self);
+            }
+        }
+
+        fn visit_arrow_expr(&mut self, arrow: &ArrowExpr) {
+            if self.descend_into_functions {
+                arrow.visit_children_with(self);
+            }
+        }
+
         fn visit_ident(&mut self, ident: &Ident) {
             match ident.sym.as_ref() {
                 "arguments" => self.signals.arguments_ref = true,
@@ -848,6 +867,7 @@ fn collect_ts_helper_body_signals(stmts: &[Stmt]) -> TsHelperBodySignals {
 
     let mut visitor = SignalVisitor {
         signals: TsHelperBodySignals::default(),
+        descend_into_functions,
     };
     stmts.visit_with(&mut visitor);
     visitor.signals
@@ -919,9 +939,7 @@ fn ts_generated_values_callable_kind(ident: &Ident, expr: &Expr) -> Option<TsHel
         return None;
     }
     let (param_len, body) = ts_helper_callable_body(expr)?;
-    let signals = collect_ts_helper_body_signals(body);
-    (param_len == 1 && signals.symbol_iterator && signals.type_error)
-        .then_some(TsHelperKind::Values)
+    ts_values_body_matches(param_len, body).then_some(TsHelperKind::Values)
 }
 
 /// Fact extraction may see minified tslib helpers as direct arrow/function
@@ -940,7 +958,7 @@ fn ts_generated_fact_callable_kind(ident: &Ident, expr: &Expr) -> Option<TsHelpe
         Some(TsHelperKind::Awaiter)
     } else if param_len >= 2 && signals.label_prop && signals.trys_prop && signals.ops_prop {
         Some(TsHelperKind::Generator)
-    } else if param_len == 1 && signals.symbol_iterator && signals.type_error {
+    } else if ts_values_body_matches(param_len, body) {
         Some(TsHelperKind::Values)
     } else {
         None
@@ -963,8 +981,19 @@ fn ts_values_function_matches(function: &Function) -> bool {
     let Some(body) = &function.body else {
         return false;
     };
-    let signals = collect_ts_helper_body_signals(&body.stmts);
-    function.params.len() == 1 && signals.symbol_iterator && signals.type_error
+    ts_values_body_matches(function.params.len(), &body.stmts)
+}
+/// `__values` / `_ts_values`: a single iterable param, grabs `Symbol.iterator`,
+/// and throws `TypeError` when the value is not iterable. Both signals sit in
+/// the helper's own statements; a user function that merely contains an inlined
+/// Babel iterable helper carries them only inside nested functions and is not
+/// a helper (removing it would delete a live function).
+fn ts_values_body_matches(param_len: usize, body: &[Stmt]) -> bool {
+    if param_len != 1 {
+        return false;
+    }
+    let signals = collect_ts_helper_own_body_signals(body);
+    signals.symbol_iterator && signals.type_error
 }
 fn ts_generator_state_function_matches(function: &Function) -> bool {
     let Some(body) = &function.body else {
