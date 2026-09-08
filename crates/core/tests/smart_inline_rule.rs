@@ -1739,3 +1739,18 @@ function f(D) {
 "#;
     assert_eq_normalized(&apply(input), expected);
 }
+
+#[test]
+fn exported_generated_alias_declaration_is_kept() {
+    // `export { qo as Text }` is a use the statement-run analysis cannot see.
+    // Inlining the one visible use is fine; the declaration must stay.
+    let input = r#"
+const Uo = create();
+const qo = Uo;
+const Yo = uo(qo);
+export { qo as Text, Yo };
+"#;
+    let output = apply(input);
+    assert!(output.contains("const qo = Uo"), "{output}");
+    assert!(output.contains("export { qo as Text, Yo }"), "{output}");
+}

@@ -457,7 +457,12 @@ fn process_stmts(
         return stmts;
     }
     // Pass 1: inline single-use const declarations (temp vars)
-    let stmts = inline_temp_vars(stmts, initialized_bindings, unresolved_mark);
+    let stmts = inline_temp_vars(
+        stmts,
+        initialized_bindings,
+        exported_bindings,
+        unresolved_mark,
+    );
     // Pass 1a: forward adjacent assignment aliases created by async/state-machine
     // recovery: `tmp = expr; target = tmp;` -> `target = expr;`.
     let stmts = forward_adjacent_assignment_aliases(stmts, unresolved_mark);
@@ -662,6 +667,7 @@ impl VisitMut for GlobalIdentInliner<'_> {
 fn inline_temp_vars(
     stmts: Vec<Stmt>,
     initialized_bindings: &HashSet<BindingKey>,
+    exported_bindings: &HashSet<BindingKey>,
     unresolved_mark: Option<Mark>,
 ) -> Vec<Stmt> {
     // Collect generated-looking `const t = e` aliases. Existing `let`
@@ -684,6 +690,12 @@ fn inline_temp_vars(
                     // the builtin-alias passes; folding it away here would
                     // reshape the fixtures those passes are keyed on.
                     if is_stable_builtin_alias_root(&bi.id.sym) {
+                        continue;
+                    }
+                    // `export { t as Name }` lives outside this statement run
+                    // and is a use the usage analysis cannot see; removing the
+                    // declaration would leave the specifier dangling.
+                    if exported_bindings.contains(&(bi.id.sym.clone(), bi.id.ctxt)) {
                         continue;
                     }
                     if let Some(init) = &decl.init {
