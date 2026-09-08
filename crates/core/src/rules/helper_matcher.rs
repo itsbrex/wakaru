@@ -106,6 +106,41 @@ pub(crate) fn remaining_refs_outside_declarations(
     finder.found
 }
 
+/// The candidates whose declarations can go: nothing outside the removable
+/// set references them. A candidate that stays referenced keeps its
+/// declaration, so the references inside it count for the others; the set
+/// shrinks until it is stable instead of skipping every candidate declaration
+/// once, which would remove a dependency of a kept candidate.
+pub(crate) fn removable_without_remaining_refs(
+    module: &Module,
+    candidates: &HashSet<BindingKey>,
+) -> HashSet<BindingKey> {
+    let mut removable = candidates.clone();
+    loop {
+        let remaining = remaining_refs_outside_declarations(module, &removable, &removable);
+        if remaining.is_empty() {
+            return removable;
+        }
+        removable.retain(|key| !remaining.contains(key));
+    }
+}
+
+/// [`removable_without_remaining_refs`] for candidates that are only var
+/// declarators: function declarations are not skipped.
+pub(crate) fn removable_without_remaining_var_declarator_refs(
+    module: &Module,
+    candidates: &HashSet<BindingKey>,
+) -> HashSet<BindingKey> {
+    let mut removable = candidates.clone();
+    loop {
+        let remaining = remaining_refs_outside_var_declarators(module, &removable, &removable);
+        if remaining.is_empty() {
+            return removable;
+        }
+        removable.retain(|key| !remaining.contains(key));
+    }
+}
+
 /// Collect which bindings from `targets` are referenced anywhere in `node`.
 pub(crate) fn collect_refs<T>(node: &T, targets: &HashSet<BindingKey>) -> HashSet<BindingKey>
 where

@@ -85,18 +85,24 @@ rules across Babel, TypeScript, webpack, and template helper recovery:
   `expr_binding_key()`, and `var_declarator_binding_key()`
 - binding-safe predicates such as `ident_matches_binding()`,
   `expr_matches_binding()`, and `member_of_binding()`
-- declaration cleanup helpers such as `remaining_refs_outside_*()`,
-  `remove_fn_decls_by_binding()`, and `remove_var_declarators_by_binding()`
+- declaration cleanup helpers such as `removable_without_remaining_refs()`,
+  `remaining_refs_outside_*()`, `remove_fn_decls_by_binding()`, and
+  `remove_var_declarators_by_binding()`
 
 Use these when a rule has already identified helper bindings and needs to track
 uses, rewrite call sites, or remove consumed declarations. This keeps the common
 scope-sensitive lifecycle code in one place while leaving each rule's semantic
 matching local to that rule.
 
-Two removal rules hold for every caller. `remove_helpers_without_remaining_refs`
-iterates: a helper the module still references stays, and so does every helper
-it references, because references inside a kept declaration count. Import
-cleanup drops only an import that lost its last specifier; a bare
+Two removal rules hold for every caller. Removal iterates until the removable
+set is stable: a helper the module still references stays, and so does every
+helper it references, because references inside a kept declaration count.
+`remove_helpers_without_remaining_refs` and `removable_without_remaining_refs()`
+implement this; a rule-local sweep must not call `remaining_refs_outside_*()`
+once and remove the difference, because that skips every candidate declaration
+and deletes a dependency of a kept candidate (an esbuild `__defProp` alias under
+a kept `__defNormalProp`, a `__values` helper called from a kept `__generator`).
+Import cleanup drops only an import that lost its last specifier; a bare
 `import "./side.js"` is a side effect the module depends on and is never
 removed by helper cleanup.
 

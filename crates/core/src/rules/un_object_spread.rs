@@ -17,7 +17,7 @@ use super::cross_module_helper_refs::{
     cross_module_member_helper_kind, cross_module_ts_member_helper,
 };
 use super::helper_matcher::{
-    binding_key, member_prop_name, remaining_refs_outside_declarations, remove_fn_decls_by_binding,
+    binding_key, member_prop_name, removable_without_remaining_refs, remove_fn_decls_by_binding,
     remove_var_declarators_by_binding, static_member_prop_name, var_declarator_binding_key,
     NumericRequireNamespaces,
 };
@@ -322,11 +322,7 @@ fn remove_unused_esbuild_object_builtin_aliases(
     if candidates.is_empty() {
         return;
     }
-    let remaining = remaining_refs_outside_declarations(module, &candidates, &candidates);
-    let removable: HashSet<_> = candidates
-        .into_iter()
-        .filter(|key| !remaining.contains(key))
-        .collect();
+    let removable = removable_without_remaining_refs(module, &candidates);
     if !removable.is_empty() {
         remove_var_declarators_by_binding(&mut module.body, &removable);
     }
@@ -336,12 +332,7 @@ fn remove_unused_helper_dependency_decls(module: &mut Module, candidates: &HashS
     if candidates.is_empty() {
         return;
     }
-    let remaining = remaining_refs_outside_declarations(module, candidates, candidates);
-    let removable: HashSet<_> = candidates
-        .iter()
-        .filter(|key| !remaining.contains(*key))
-        .cloned()
-        .collect();
+    let removable = removable_without_remaining_refs(module, candidates);
     if removable.is_empty() {
         return;
     }

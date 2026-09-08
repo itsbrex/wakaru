@@ -23,7 +23,7 @@ use super::cross_module_helper_refs::{
 };
 use super::decl_utils::fresh_binding_ident;
 use super::helper_matcher::{
-    binding_key, member_prop_name, remaining_refs_outside_declarations,
+    binding_key, member_prop_name, removable_without_remaining_refs,
     remove_fn_decls_from_body_by_binding, remove_import_specifiers_by_binding,
     remove_var_declarators_by_binding, static_member_prop_name, var_declarator_binding_key,
     NumericRequireNamespaces,
@@ -403,8 +403,7 @@ fn remove_unused_property_key_helpers(module: &mut Module, helpers: &HashSet<Bin
     if helpers.is_empty() {
         return;
     }
-    let remaining = remaining_refs_outside_declarations(module, helpers, helpers);
-    let removable: HashSet<_> = helpers.difference(&remaining).cloned().collect();
+    let removable = removable_without_remaining_refs(module, helpers);
     if removable.is_empty() {
         return;
     }
@@ -1034,8 +1033,7 @@ fn remove_unused_computed_key_aliases(module: &mut Module, aliases: &HashSet<Bin
     if aliases.is_empty() {
         return;
     }
-    let remaining = remaining_refs_outside_declarations(module, aliases, aliases);
-    let removable: HashSet<_> = aliases.difference(&remaining).cloned().collect();
+    let removable = removable_without_remaining_refs(module, aliases);
     if removable.is_empty() {
         return;
     }
@@ -1664,11 +1662,7 @@ fn remove_unused_esbuild_object_rest_builtin_aliases(
     if candidates.is_empty() {
         return;
     }
-    let remaining = remaining_refs_outside_declarations(module, &candidates, &candidates);
-    let removable: HashSet<_> = candidates
-        .into_iter()
-        .filter(|key| !remaining.contains(key))
-        .collect();
+    let removable = removable_without_remaining_refs(module, &candidates);
     if !removable.is_empty() {
         remove_var_declarators_by_binding(&mut module.body, &removable);
     }

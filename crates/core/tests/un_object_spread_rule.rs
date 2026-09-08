@@ -1283,3 +1283,36 @@ fn direct_tslib_assign_preserves_mutation_and_dynamic_lookup() {
         assert_eq_normalized(&render_rule(input, UnObjectSpread::new_with_mark), input);
     }
 }
+
+#[test]
+fn partially_converted_esbuild_spread_keeps_the_define_property_alias() {
+    // `__spreadValues(target, extra)` mutates a non-literal target and stays a
+    // call, so `__spreadValues` and `__defNormalProp` survive. `__defProp` is
+    // only referenced from inside `__defNormalProp`; a kept helper's references
+    // count, so the alias must survive with it.
+    let input = r#"
+var __defProp = Object.defineProperty;
+var __getOwnPropSymbols = Object.getOwnPropertySymbols;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __propIsEnum = Object.prototype.propertyIsEnumerable;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __spreadValues = (a, b) => {
+    for (var prop in b || (b = {})) if (__hasOwnProp.call(b, prop)) __defNormalProp(a, prop, b[prop]);
+    if (__getOwnPropSymbols) for (var prop of __getOwnPropSymbols(b)) {
+        if (__propIsEnum.call(b, prop)) __defNormalProp(a, prop, b[prop]);
+    }
+    return a;
+};
+const out = __spreadValues({}, app_info);
+__spreadValues(target, extra);
+use(out);
+"#;
+    let output = render_rule(input, |_| UnObjectSpread::default());
+    assert!(output.contains("const out = {"), "{output}");
+    assert!(output.contains("__spreadValues(target, extra)"), "{output}");
+    assert!(output.contains("__defNormalProp = "), "{output}");
+    assert!(
+        output.contains("var __defProp = Object.defineProperty"),
+        "{output}"
+    );
+}

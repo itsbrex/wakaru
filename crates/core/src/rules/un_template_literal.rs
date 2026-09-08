@@ -13,7 +13,7 @@ use super::cross_module_helper_refs::{
     collect_cross_module_helper_refs, cross_module_member_helper_kind, CrossModuleHelperRefs,
 };
 use super::helper_matcher::{
-    binding_key, expr_binding_key, remaining_refs_outside_declarations, remove_fn_decls_by_binding,
+    binding_key, expr_binding_key, removable_without_remaining_refs, remove_fn_decls_by_binding,
     remove_import_specifiers_by_binding, remove_var_declarators_by_binding,
     var_declarator_binding_key, BindingKey,
 };
@@ -845,8 +845,7 @@ fn escape_template_raw_cooked_copy(input: &str) -> String {
 }
 
 fn remove_unused_template_bindings(module: &mut Module, candidates: &HashSet<BindingKey>) {
-    let remaining = remaining_refs_outside_declarations(module, candidates, candidates);
-    let unused: HashSet<_> = candidates.difference(&remaining).cloned().collect();
+    let unused = removable_without_remaining_refs(module, candidates);
     if unused.is_empty() {
         return;
     }

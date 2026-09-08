@@ -13,6 +13,7 @@ use swc_core::ecma::ast::{
 use super::helper_matcher::{
     binding_key, collect_refs, expr_matches_binding, member_prop_name,
     remaining_refs_outside_declarations, remaining_refs_outside_var_declarators,
+    removable_without_remaining_refs, removable_without_remaining_var_declarator_refs,
     remove_fn_decls_from_body_by_binding, remove_import_specifiers_by_binding,
     remove_var_declarators_by_binding, static_member_prop_name,
 };
@@ -244,11 +245,7 @@ impl LocalHelperContext {
             return;
         }
 
-        let remaining = remaining_refs_outside_declarations(module, &helper_keys, &helper_keys);
-        let removable: HashSet<BindingKey> = helper_keys
-            .into_iter()
-            .filter(|key| !remaining.contains(key))
-            .collect();
+        let removable = removable_without_remaining_refs(module, &helper_keys);
         if !removable.is_empty() {
             remove_var_declarators_by_binding(&mut module.body, &removable);
             remove_fn_decls_from_body_by_binding(&mut module.body, &removable);
@@ -262,11 +259,7 @@ impl LocalHelperContext {
             return;
         }
 
-        let remaining = remaining_refs_outside_var_declarators(module, &helper_keys, &helper_keys);
-        let removable: HashSet<BindingKey> = helper_keys
-            .into_iter()
-            .filter(|key| !remaining.contains(key))
-            .collect();
+        let removable = removable_without_remaining_var_declarator_refs(module, &helper_keys);
         if removable.is_empty() {
             return;
         }

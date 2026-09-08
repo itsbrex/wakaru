@@ -8,7 +8,8 @@ use swc_core::ecma::ast::{
 use swc_core::ecma::visit::{VisitMut, VisitMutWith};
 
 use super::helper_matcher::{
-    binding_key, collect_refs, remaining_refs_outside_declarations, remove_fn_decls_by_binding,
+    binding_key, collect_refs, remaining_refs_outside_declarations,
+    removable_without_remaining_refs, remove_fn_decls_by_binding,
     remove_import_specifiers_by_binding, remove_var_declarators_by_binding, BindingKey,
 };
 use super::transpiler_helper_utils::collect_maybe_array_like_bindings;
@@ -82,8 +83,7 @@ impl VisitMut for UnToArray {
             let mut replacer = ToArrayUnwrapper { helpers: &helpers };
             module.visit_mut_with(&mut replacer);
 
-            let remaining = remaining_refs_outside_declarations(module, &helpers, &helpers);
-            let removable: HashSet<BindingKey> = helpers.difference(&remaining).cloned().collect();
+            let removable = removable_without_remaining_refs(module, &helpers);
             if !removable.is_empty() {
                 remove_import_specifiers_by_binding(&mut module.body, &removable);
                 remove_fn_decls_by_binding(module, &removable);

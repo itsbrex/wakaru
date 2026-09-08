@@ -1103,3 +1103,34 @@ fn lifted_extends_factory_requires_private_local_and_matching_callable() {
         );
     }
 }
+
+#[test]
+fn inline_ts_helper_referenced_only_by_a_kept_helper_stays() {
+    GLOBALS.set(&Globals::new(), || {
+        let mut module = parse_module(
+            r#"
+            var __values = (this && this.__values) || function (o) {
+                var s = typeof Symbol === "function" && Symbol.iterator, m = s && o[s], i = 0;
+                if (m) return m.call(o);
+                throw new TypeError(s ? "Object is not iterable." : "Symbol.iterator is not defined.");
+            };
+            var __generator = (this && this.__generator) || function (thisArg, body) {
+                __values(body);
+                return body.call(thisArg, { label: 0, sent: function() {}, trys: [], ops: [] });
+            };
+            __generator(this, function () {});
+            "#,
+        );
+        let context = LocalHelperContext::collect(&module);
+
+        context.remove_unused_inline_ts_helpers(
+            &mut module,
+            &[TsHelperKind::Generator, TsHelperKind::Values],
+        );
+
+        // `__generator` is still called, so the reference to `__values` inside
+        // its initializer counts and `__values` must stay with it.
+        assert!(module_has_var(&module, "__generator"));
+        assert!(module_has_var(&module, "__values"));
+    });
+}
