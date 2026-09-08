@@ -5,24 +5,32 @@ use swc_core::common::{SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrowExpr, ArrowFunctionBody, BindingIdent, CallExpr, Callee, CatchClause, ClassDecl,
     Constructor, Decl, Expr, ExprOrSpread, FnDecl, Function, FunctionBody, GetterProp, Ident, Lit,
-    MemberProp, MethodProp, ObjectPatProp, Param, ParamOrTsParamProp, Pat, SetterProp, Stmt,
-    ThisExpr, VarDecl, VarDeclKind, VarDeclarator,
+    MemberProp, MethodProp, Module, ObjectPatProp, Param, ParamOrTsParamProp, Pat, SetterProp,
+    Stmt, ThisExpr, VarDecl, VarDeclKind, VarDeclarator,
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
 use crate::analysis::binding_uses::BindingUseIndex;
 
-use super::eval_utils::{js_source_mentions_binding, DirectEvalAnalyzer};
+use super::eval_utils::{js_source_mentions_binding, module_has_with_stmt, DirectEvalAnalyzer};
 use super::rename_utils::{rename_bindings, BindingRename, BindingRenamer};
 use super::RewriteLevel;
 
 pub struct UnIife {
     level: RewriteLevel,
+    /// A `with` statement anywhere in the module: param renames and literal
+    /// extraction rebind names the `with` object could supply at runtime, so
+    /// they are skipped module-wide (docs/rewrite-assumptions.md). Direct eval
+    /// is handled per IIFE body by `plan_param_rewrites`.
+    with_statement_present: bool,
 }
 
 impl UnIife {
     pub fn new(level: RewriteLevel) -> Self {
-        Self { level }
+        Self {
+            level,
+            with_statement_present: false,
+        }
     }
 }
 
@@ -33,6 +41,11 @@ impl Default for UnIife {
 }
 
 impl VisitMut for UnIife {
+    fn visit_mut_module(&mut self, module: &mut Module) {
+        self.with_statement_present = module_has_with_stmt(module);
+        module.visit_mut_children_with(self);
+    }
+
     fn visit_mut_expr(&mut self, expr: &mut Expr) {
         expr.visit_mut_children_with(self);
 
@@ -42,7 +55,7 @@ impl VisitMut for UnIife {
                 *expr = *inner;
                 return;
             }
-            process_iife(call_expr, self.level);
+            process_iife(call_expr, self.level, self.with_statement_present);
         }
     }
 }
@@ -82,13 +95,13 @@ fn try_simplify_arrow_expr_iife(call: &CallExpr) -> Option<Box<Expr>> {
     }
 }
 
-fn process_iife(call: &mut CallExpr, level: RewriteLevel) {
+fn process_iife(call: &mut CallExpr, level: RewriteLevel, with_statement_present: bool) {
     // `arrow.call(thisArg, args...)` → `arrow(args...)`. Arrow functions ignore
     // a `.call` `thisArg` (their `this` is always lexical), so the thisArg is
     // dead weight and the resulting arrow IIFE can go through the normal path.
     try_unwrap_dot_call_on_arrow(call);
 
-    if level < RewriteLevel::Standard {
+    if level < RewriteLevel::Standard || with_statement_present {
         return;
     }
 

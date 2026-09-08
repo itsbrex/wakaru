@@ -518,3 +518,54 @@ export const merged = extend({}, base);
     assert!(output.contains("function extend"), "{output}");
     assert!(output.contains("merged = {"), "{output}");
 }
+
+#[test]
+fn with_statement_keeps_dead_declarations_module_wide() {
+    // `with` can resolve any name against its object at runtime; the
+    // module-wide skip in docs/rewrite-assumptions.md keeps every removable
+    // declaration, initialized or not.
+    let input = r#"
+function helper() { return 1; }
+function run(scope) {
+  var unused;
+  with (scope) { observe(); }
+  return 2;
+}
+export const value = run({});
+"#;
+    // Only the declaration kind changes; nothing is removed.
+    let expected = input.replace("var unused;", "let unused;");
+    assert_eq_normalized(&render_with_dce(input), expected.trim());
+}
+
+#[test]
+fn unknown_direct_eval_keeps_dead_declarations_module_wide() {
+    let input = r#"
+function helper() { return 1; }
+function run(source) {
+  return eval(source);
+}
+export const value = run("helper()");
+"#;
+    assert_eq_normalized(&render_with_dce(input), input.trim());
+}
+
+#[test]
+fn known_direct_eval_keeps_only_mentioned_dead_declarations() {
+    let input = r#"
+function helper() { return 1; }
+function other() { return 2; }
+function run() {
+  return eval("helper()");
+}
+export const value = run();
+"#;
+    let expected = r#"
+function helper() { return 1; }
+function run() {
+  return eval("helper()");
+}
+export const value = run();
+"#;
+    assert_eq_normalized(&render_with_dce(input), expected.trim());
+}

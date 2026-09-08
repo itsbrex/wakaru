@@ -172,3 +172,14 @@ export { m };
     assert!(!output.contains("const o ="), "{output}");
     assert!(!output.contains("o(x)"), "{output}");
 }
+
+#[test]
+fn preserves_const_alias_when_module_has_dynamic_scope() {
+    // The `var` path already rejected dynamic scope; `const`/`let` aliases
+    // are the same hazard: inlining reads `Object` as the global at a site
+    // where `with` or a direct eval may have bound that name.
+    for hazard in ["eval(code);", "with (scope) { observe(); }"] {
+        let input = format!("const e = Object.freeze;\n{hazard}\nuse(e(value));\n");
+        assert_eq_normalized(&apply(&input), &input);
+    }
+}

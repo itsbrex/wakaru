@@ -60,6 +60,15 @@ impl<'a> UnTemplateLiteral<'a> {
         module: &mut Module,
         local_helpers: &LocalHelperContext,
     ) {
+        // Tagged-template recovery consumes helper, cache, and factory
+        // bindings; a `with` statement or a direct eval anywhere in the module
+        // can still reach them by name, so only the binding-free concat and
+        // plus-chain rewrites run (docs/rewrite-assumptions.md, dynamic-scope
+        // skip).
+        if super::eval_utils::has_dynamic_scope_construct(module) {
+            module.visit_mut_children_with(self);
+            return;
+        }
         let cross_module_helpers = self
             .module_facts
             .map(|facts| {

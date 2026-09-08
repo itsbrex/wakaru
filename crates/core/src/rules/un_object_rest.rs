@@ -142,6 +142,12 @@ fn run_un_object_rest(
     module_facts: Option<&ModuleFactsMap>,
     current_filename: Option<&str>,
 ) {
+    // Rest recovery removes helper and temp bindings; a `with` statement or a
+    // direct eval anywhere in the module can still reach them by name, so the
+    // module is left as is (docs/rewrite-assumptions.md, dynamic-scope skip).
+    if super::eval_utils::has_dynamic_scope_construct(module) {
+        return;
+    }
     // Collect named OWP helpers (function declarations detected by transpiler_helper_utils)
     let mut local_named_helpers =
         local_helpers.helpers_of_kind(TranspilerHelperKind::ObjectWithoutProperties);

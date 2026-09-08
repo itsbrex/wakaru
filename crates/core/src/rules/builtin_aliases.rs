@@ -2,13 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use swc_core::common::{Mark, Span};
 use swc_core::ecma::ast::{
-    CallExpr, Decl, ExportSpecifier, Expr, Ident, MemberExpr, MemberProp, Module, ModuleDecl,
+    Decl, ExportSpecifier, Expr, Ident, MemberExpr, MemberProp, Module, ModuleDecl,
     ModuleExportName, ModuleItem, Pat, PropName, Stmt, UnaryExpr, UnaryOp, UpdateExpr, VarDeclKind,
-    WithStmt,
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
-use super::eval_utils::is_direct_eval_call;
+use super::eval_utils::has_dynamic_scope_construct;
 use super::helper_matcher::{
     binding_key, collect_refs, remove_var_declarators_by_binding, var_declarator_binding_key,
     BindingKey,
@@ -16,11 +15,15 @@ use super::helper_matcher::{
 use crate::js_names::is_stable_builtin_alias_root;
 use crate::utils::paren::strip_parens;
 
+/// Inlining an alias reads the builtin (`Object`, `Math`) as the global at
+/// every former use site. A `with` statement or a direct eval in the same
+/// scope can bind that name at runtime, so both entry points skip when either
+/// construct is present, whatever the declaration kind
+/// (docs/rewrite-assumptions.md, dynamic-scope skip).
 #[derive(Clone, Copy)]
 pub(crate) struct BuiltinAliasInlineOptions {
     allow_var: bool,
     require_no_var_use_before_decl: bool,
-    reject_var_with_dynamic_scope: bool,
 }
 
 impl BuiltinAliasInlineOptions {
@@ -28,7 +31,6 @@ impl BuiltinAliasInlineOptions {
         Self {
             allow_var: false,
             require_no_var_use_before_decl: false,
-            reject_var_with_dynamic_scope: false,
         }
     }
 
@@ -36,7 +38,6 @@ impl BuiltinAliasInlineOptions {
         Self {
             allow_var: true,
             require_no_var_use_before_decl: true,
-            reject_var_with_dynamic_scope: true,
         }
     }
 }
@@ -72,8 +73,8 @@ pub(crate) fn inline_module_builtin_aliases(
         return false;
     }
 
-    if options.reject_var_with_dynamic_scope && module_has_dynamic_scope_construct(module) {
-        candidates.retain(|_, candidate| candidate.decl_kind != VarDeclKind::Var);
+    if has_dynamic_scope_construct(module) {
+        return false;
     }
 
     if options.require_no_var_use_before_decl {
@@ -124,8 +125,8 @@ pub(crate) fn inline_builtin_aliases_stmts(
         return stmts;
     }
 
-    if options.reject_var_with_dynamic_scope && stmts_have_dynamic_scope_construct(&stmts) {
-        candidates.retain(|_, candidate| candidate.decl_kind != VarDeclKind::Var);
+    if has_dynamic_scope_construct(stmts.as_slice()) {
+        return stmts;
     }
 
     if options.require_no_var_use_before_decl {
@@ -495,54 +496,5 @@ fn set_expr_span(expr: &mut Expr, span: Span) {
         Expr::Ident(id) => id.span = span,
         Expr::Member(member) => member.span = span,
         _ => {}
-    }
-}
-
-fn module_has_dynamic_scope_construct(module: &Module) -> bool {
-    let mut visitor = DynamicScopeConstructFinder::default();
-    module.visit_with(&mut visitor);
-    visitor.found
-}
-
-fn stmts_have_dynamic_scope_construct(stmts: &[Stmt]) -> bool {
-    let mut visitor = DynamicScopeConstructFinder::default();
-    stmts.visit_with(&mut visitor);
-    visitor.found
-}
-
-#[derive(Default)]
-struct DynamicScopeConstructFinder {
-    found: bool,
-}
-
-impl Visit for DynamicScopeConstructFinder {
-    fn visit_call_expr(&mut self, call: &CallExpr) {
-        if is_direct_eval_call(call) {
-            self.found = true;
-            return;
-        }
-        call.visit_children_with(self);
-    }
-
-    fn visit_with_stmt(&mut self, _: &WithStmt) {
-        self.found = true;
-    }
-
-    fn visit_expr(&mut self, expr: &Expr) {
-        if !self.found {
-            expr.visit_children_with(self);
-        }
-    }
-
-    fn visit_stmt(&mut self, stmt: &Stmt) {
-        if !self.found {
-            stmt.visit_children_with(self);
-        }
-    }
-
-    fn visit_module_item(&mut self, item: &ModuleItem) {
-        if !self.found {
-            item.visit_children_with(self);
-        }
     }
 }

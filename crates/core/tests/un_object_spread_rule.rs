@@ -1279,6 +1279,8 @@ fn direct_tslib_assign_preserves_mutation_and_dynamic_lookup() {
         "var result = require('tslib').__assign(target, source);",
         "function copy(require) { return require('tslib').__assign({}, source); }",
         "with (scope) { var result = require('tslib').__assign({}, source); }",
+        "with (scope) { observe(); } var result = require('tslib').__assign({}, source);",
+        "eval(code); var result = require('tslib').__assign({}, source);",
     ] {
         assert_eq_normalized(&render_rule(input, UnObjectSpread::new_with_mark), input);
     }

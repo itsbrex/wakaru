@@ -1793,3 +1793,11 @@ function View({ TypographyComponent, rest }) {
     assert!(output.contains("const I = TypographyComponent"), "{output}");
     assert!(output.contains("<I Component"), "{output}");
 }
+
+#[test]
+fn no_builtin_alias_inline_when_module_has_dynamic_scope() {
+    for hazard in ["eval(code);", "with (scope) { observe(); }"] {
+        let input = format!("const e = Object.freeze;\n{hazard}\nuse(e(value));\nuse(e(other));\n");
+        assert_eq_normalized(&apply(&input), &input);
+    }
+}

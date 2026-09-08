@@ -896,3 +896,17 @@ fn parameter_rename_avoids_bindings_inside_default_functions() {
         assert_eq_normalized(&apply_rule(input), &expected);
     }
 }
+
+#[test]
+fn with_statement_keeps_iife_params_module_wide() {
+    // A `with` anywhere in the module blocks param renames and literal
+    // extraction (docs/rewrite-assumptions.md, dynamic-scope skip); the eval
+    // side is already handled per IIFE body.
+    let input = r#"
+(function(e) {
+  use(e);
+})(1);
+with (scope) { observe(); }
+"#;
+    assert_eq_normalized(&apply_rule(input), input);
+}

@@ -862,3 +862,27 @@ fn private_map_owner_recovers_real_tsc_default_and_expression_modules() {
         assert!(!output.contains("WeakMap"), "{output}");
     }
 }
+
+#[test]
+fn keeps_init_methods_when_module_has_dynamic_scope() {
+    // Inlining `__init` bodies and dropping the method (and private WeakMap
+    // declarations) removes bindings; the module-wide dynamic-scope skip in
+    // docs/rewrite-assumptions.md applies.
+    for hazard in ["eval(code);", "with (scope) { observe(); }"] {
+        let input = format!(
+            r#"
+class Foo {{
+    __init() {{
+        this._count = 0;
+    }}
+    constructor() {{
+        Foo.prototype.__init.call(this);
+    }}
+}}
+{hazard}
+"#
+        );
+        let output = render(&input);
+        assert!(output.contains("__init()"), "{output}");
+    }
+}

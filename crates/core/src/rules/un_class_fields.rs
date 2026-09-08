@@ -56,7 +56,6 @@ struct PrivateHelperCallees {
     namespaces: HashSet<BindingKey>,
     kind: TsHelperKind,
     unresolved_mark: Mark,
-    dynamic_lookup: bool,
 }
 impl PrivateHelperCallees {
     fn empty(kind: TsHelperKind, unresolved_mark: Mark) -> Self {
@@ -65,7 +64,6 @@ impl PrivateHelperCallees {
             namespaces: HashSet::new(),
             kind,
             unresolved_mark,
-            dynamic_lookup: false,
         }
     }
     fn collect(
@@ -78,12 +76,8 @@ impl PrivateHelperCallees {
             crate::analysis::binding_uses::BindingUseIndex::collect_direct_write_bindings(module);
         struct Hazards<'a> {
             written: &'a mut HashSet<BindingKey>,
-            dynamic_lookup: bool,
         }
         impl Visit for Hazards<'_> {
-            fn visit_with_stmt(&mut self, _: &swc_core::ecma::ast::WithStmt) {
-                self.dynamic_lookup = true;
-            }
             fn visit_assign_expr(&mut self, assign: &AssignExpr) {
                 if let AssignTarget::Simple(SimpleAssignTarget::Member(member)) = &assign.left {
                     if let Expr::Ident(id) = member.obj.as_ref() {
@@ -103,10 +97,8 @@ impl PrivateHelperCallees {
         }
         let mut hazards = Hazards {
             written: &mut written,
-            dynamic_lookup: false,
         };
         module.visit_with(&mut hazards);
-        let dynamic_lookup = hazards.dynamic_lookup;
         Self {
             bindings: helpers
                 .ts_helpers_of_kind(kind)
@@ -121,16 +113,12 @@ impl PrivateHelperCallees {
                 .collect(),
             kind,
             unresolved_mark,
-            dynamic_lookup,
         }
     }
     fn iter(&self) -> impl Iterator<Item = &BindingKey> {
         self.bindings.iter()
     }
     fn matches(&self, expr: &Expr) -> bool {
-        if self.dynamic_lookup {
-            return false;
-        }
         let expr = crate::utils::paren::strip_parens(expr);
         if let Expr::Ident(id) = expr {
             return self.bindings.contains(&binding_key(id));
@@ -170,6 +158,13 @@ impl UnClassFields {
         module: &mut Module,
         local_helpers: &LocalHelperContext,
     ) {
+        // Field recovery drops `__init` methods, private WeakMap declarations,
+        // and helper bindings; a `with` statement or direct eval anywhere can
+        // still reach those names, so the module is left as is
+        // (docs/rewrite-assumptions.md, dynamic-scope skip).
+        if super::eval_utils::has_dynamic_scope_construct(module) {
+            return;
+        }
         let helpers = local_helpers.helpers_of_kind(TranspilerHelperKind::DefineProperty);
         let previous_helpers = std::mem::replace(
             &mut self.define_property_helpers,

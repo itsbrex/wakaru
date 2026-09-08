@@ -22,6 +22,7 @@ use super::decl_utils::{
     class_accessor_descriptor_attributes, class_method_has_invalid_signature,
     ensure_setter_has_value_param, ClassAccessorDescriptorAttributes,
 };
+use super::eval_utils::has_dynamic_scope_construct;
 use super::expr_utils::is_unresolved_ident;
 use super::helper_matcher::{binding_key, BindingKey};
 use super::transpiler_helper_utils::{
@@ -69,6 +70,15 @@ impl UnEs6Class {
 
 impl VisitMut for UnEs6Class {
     fn visit_mut_module_items(&mut self, items: &mut Vec<ModuleItem>) {
+        // Class recovery removes the IIFE, its helper bindings, and the
+        // constructor function, then re-declares the class name; a `with`
+        // statement or a direct eval anywhere can still reach the old names,
+        // so the module is left as is (docs/rewrite-assumptions.md,
+        // dynamic-scope skip).
+        if has_dynamic_scope_construct(items.as_slice()) {
+            self.module_helper_context = None;
+            return;
+        }
         // Pipeline path: use pre-built context from LocalHelperContext.
         // Standalone path (unit tests): full body-shape scan.
         let helper_context = self.module_helper_context.take().unwrap_or_else(|| {
@@ -77,7 +87,7 @@ impl VisitMut for UnEs6Class {
         let used_imports = used_ts_extends_imports(items, &helper_context.ts_extends_helpers);
         let mut inner =
             UnEs6ClassInner::new(helper_context, self.unresolved_mark, self.rewrite_level);
-        if inner.can_index_ts_inheritance() && !has_inheritance_dynamic_scope(items) {
+        if inner.can_index_ts_inheritance() {
             inner.inheritance_uses = Some(Rc::new(BindingUseIndex::collect_module_items(items)));
         }
         items.visit_mut_with(&mut inner);
@@ -95,11 +105,14 @@ impl VisitMut for UnEs6Class {
     }
 
     fn visit_mut_stmts(&mut self, stmts: &mut Vec<Stmt>) {
+        if has_dynamic_scope_construct(stmts.as_slice()) {
+            return;
+        }
         // Non-module context: scan local scope for helpers
         let helper_context = Es6ClassHelperContext::from_stmts(stmts, self.unresolved_mark);
         let mut inner =
             UnEs6ClassInner::new(helper_context, self.unresolved_mark, self.rewrite_level);
-        if inner.can_index_ts_inheritance() && !has_inheritance_dynamic_scope(stmts) {
+        if inner.can_index_ts_inheritance() {
             inner.inheritance_uses = Some(Rc::new(BindingUseIndex::collect_stmts(stmts)));
         }
         stmts.visit_mut_with(&mut inner);
@@ -128,7 +141,7 @@ fn used_ts_extends_imports(
             }
         }
     }
-    if candidates.is_empty() || has_inheritance_dynamic_scope(items) {
+    if candidates.is_empty() {
         return HashSet::new();
     }
     let uses = BindingUseIndex::collect_module_items(items);
@@ -269,29 +282,6 @@ impl UnEs6ClassInner {
             rewrite_level,
         }
     }
-}
-
-#[derive(Default)]
-struct InheritanceDynamicScope {
-    found: bool,
-}
-
-impl Visit for InheritanceDynamicScope {
-    fn visit_with_stmt(&mut self, _: &swc_core::ecma::ast::WithStmt) {
-        self.found = true;
-    }
-    fn visit_call_expr(&mut self, call: &CallExpr) {
-        if super::eval_utils::is_direct_eval_call(call) {
-            self.found = true;
-        }
-        call.visit_children_with(self);
-    }
-}
-
-fn has_inheritance_dynamic_scope<T: VisitWith<InheritanceDynamicScope> + ?Sized>(node: &T) -> bool {
-    let mut scan = InheritanceDynamicScope::default();
-    node.visit_with(&mut scan);
-    scan.found
 }
 
 #[derive(Default)]

@@ -109,6 +109,13 @@ fn run_un_object_spread(
     module_facts: Option<&ModuleFactsMap>,
     current_filename: Option<&str>,
 ) {
+    // Spread recovery removes helper bindings and reads `Object` as the
+    // global; a `with` statement or a direct eval anywhere in the module can
+    // rebind either name, so the module is left as is
+    // (docs/rewrite-assumptions.md, dynamic-scope skip).
+    if super::eval_utils::has_dynamic_scope_construct(module) {
+        return;
+    }
     let esbuild_aliases = collect_esbuild_object_builtin_aliases(module, unresolved_mark);
     let esbuild_define_normal_prop_helpers = if esbuild_aliases.has_spread_values_signals() {
         collect_esbuild_define_normal_prop_helpers(module, &esbuild_aliases)

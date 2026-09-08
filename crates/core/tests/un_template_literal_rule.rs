@@ -688,3 +688,35 @@ tag(ts.__makeTemplateObject(...args));
         "{output}"
     );
 }
+
+#[test]
+fn tslib_template_factory_is_kept_when_module_has_dynamic_scope() {
+    // Restoring the tagged template consumes the helper, cache, and factory
+    // bindings; the module-wide dynamic-scope skip applies even when the
+    // hazard sits outside the `with` body.
+    for hazard in ["eval(code);", "with (scope) { observe(); }"] {
+        let input = format!(
+            r#"
+var ts = require("tslib");
+{hazard}
+function data() {{
+    const strings = ts.__makeTemplateObject(["line\n", ""], ["line\\n", ""]);
+    data = function() {{ return strings; }};
+    return strings;
+}}
+var result = tag(data(), value);
+"#
+        );
+        let output = apply(&input);
+        assert!(output.contains("__makeTemplateObject"), "{output}");
+        assert!(!output.contains("tag`"), "{output}");
+    }
+}
+
+#[test]
+fn concat_chain_recovery_ignores_dynamic_scope() {
+    // `.concat` to template recovery touches no binding, so it stays active.
+    let input = "with (scope) { observe(); }\nconst s = 'a'.concat(b, 'c');\n";
+    let output = apply(input);
+    assert!(output.contains("`a${b}c`"), "{output}");
+}

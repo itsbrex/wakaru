@@ -9,7 +9,10 @@ use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
 use super::binding_facts::collect_binding_facts;
 use super::decl_utils::{binding_id, BindingId};
-use super::eval_utils::{direct_eval_call_source, js_source_mentions_binding, EvalCallSource};
+use super::eval_utils::{
+    direct_eval_call_source, js_source_mentions_binding, module_has_with_stmt, DirectEvalAnalyzer,
+    EvalCallSource,
+};
 use super::helper_matcher::BindingKey;
 use crate::utils::paren::strip_parens;
 
@@ -44,7 +47,29 @@ impl VisitMut for DeadDecls {
             return;
         }
 
-        let mut candidates: HashSet<BindingKey> = candidates_with_spans.keys().cloned().collect();
+        // A `with` statement or a direct eval with an unknown source can
+        // reach any of these declarations by name at runtime, so the module
+        // keeps them all; a known eval source protects the names it mentions
+        // (docs/rewrite-assumptions.md, dynamic-scope skip).
+        if module_has_with_stmt(module) {
+            return;
+        }
+        let mut eval = DirectEvalAnalyzer::default();
+        module.visit_with(&mut eval);
+        if eval.unknown_direct_eval {
+            return;
+        }
+
+        let mut candidates: HashSet<BindingKey> = candidates_with_spans
+            .keys()
+            .filter(|key| {
+                !eval
+                    .known_direct_eval_sources
+                    .iter()
+                    .any(|source| js_source_mentions_binding(source, &key.0))
+            })
+            .cloned()
+            .collect();
 
         if let Some(pre_dead_spans) = &self.pre_dead_spans {
             // Delta mode keeps a declaration that was already dead in the
@@ -81,6 +106,9 @@ pub struct DeadUninitializedDecls;
 
 impl VisitMut for DeadUninitializedDecls {
     fn visit_mut_module(&mut self, module: &mut Module) {
+        if module_has_with_stmt(module) {
+            return;
+        }
         let facts = collect_binding_facts(module);
         let eval_protected = collect_eval_protected_uninitialized(module);
         let mut candidates = facts.uninitialized;
@@ -104,7 +132,7 @@ pub(crate) fn remove_consumed_uninitialized_decls(
     module: &mut Module,
     consumed: &HashSet<BindingId>,
 ) {
-    if consumed.is_empty() {
+    if consumed.is_empty() || module_has_with_stmt(module) {
         return;
     }
 

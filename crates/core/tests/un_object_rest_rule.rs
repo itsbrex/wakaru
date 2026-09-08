@@ -1877,6 +1877,8 @@ fn direct_tslib_rest_preserves_shadowing_and_dynamic_lookup() {
     for input in [
         "function copy(require) { var rest = require('tslib').__rest(source, ['x']); use(rest); }",
         "with (scope) { var rest = require('tslib').__rest(source, ['x']); use(rest); }",
+        "with (scope) { observe(); } var rest = require('tslib').__rest(source, ['x']); use(rest);",
+        "eval(code); var rest = require('tslib').__rest(source, ['x']); use(rest);",
         "var rest = require('tslib').__rest(...args); use(rest);",
     ] {
         assert_eq_normalized(&render_rule(input, UnObjectRest::new), input);

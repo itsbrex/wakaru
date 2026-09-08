@@ -2952,3 +2952,24 @@ use(Widget);
     assert!(output.contains("var _createClass2 = "), "{output}");
     assert!(output.contains("var _createClass = "), "{output}");
 }
+
+#[test]
+fn class_recovery_is_skipped_when_module_has_dynamic_scope() {
+    // The TS-inheritance index already refused dynamic scope; the base class
+    // rewrite also removes and re-declares bindings, so the module-wide skip
+    // applies to it as well.
+    for hazard in ["eval(code);", "with (scope) { observe(); }"] {
+        let input = format!(
+            r#"
+var Foo = (function() {{
+    function t(name) {{ this.name = name; }}
+    t.prototype.logger = function logger() {{ console.log(this.name); }}
+    return t;
+}}());
+{hazard}
+"#
+        );
+        let output = apply(&input);
+        assert!(!output.contains("class Foo"), "{output}");
+    }
+}
