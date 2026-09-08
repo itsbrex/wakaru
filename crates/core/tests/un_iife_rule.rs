@@ -869,3 +869,30 @@ fn literal_param_read_by_a_later_param_default_stays_a_param() {
 "#;
     assert_eq_normalized(&apply_rule(input), input);
 }
+
+#[test]
+fn parameter_rename_preserves_shorthand_keys_in_defaults_and_body() {
+    for input in [
+        "((e, t = {e}) => { use(t.e, {e}); })(source);",
+        "(function(e, t = {e}) { use(t.e, {e}); })(source);",
+    ] {
+        let expected = input
+            .replace("(e, t = {e})", "(source_1, t = {e: source_1})")
+            .replace("use(t.e, {e})", "use(t.e, {e: source_1})");
+        assert_eq_normalized(&apply_rule(input), &expected);
+    }
+}
+
+#[test]
+fn parameter_rename_avoids_bindings_inside_default_functions() {
+    for input in [
+        "((e, t = (source_1) => e) => { use(t(2)); })(source);",
+        "(function(e, t = function(source_1) { return e; }) { use(t(2)); })(source);",
+    ] {
+        let expected = input
+            .replace("(e, t =", "(source_2, t =")
+            .replace("=> e)", "=> source_2)")
+            .replace("return e;", "return source_2;");
+        assert_eq_normalized(&apply_rule(input), &expected);
+    }
+}

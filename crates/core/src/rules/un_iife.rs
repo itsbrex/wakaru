@@ -13,6 +13,7 @@ use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 use crate::analysis::binding_uses::BindingUseIndex;
 
 use super::eval_utils::{js_source_mentions_binding, DirectEvalAnalyzer};
+use super::rename_utils::{rename_bindings, BindingRename, BindingRenamer};
 use super::RewriteLevel;
 
 pub struct UnIife {
@@ -279,7 +280,7 @@ fn plan_param_rewrites<F>(
     param_count: usize,
     args: &[ExprOrSpread],
     body: &FunctionBody,
-    param_value_refs: &HashSet<(Atom, SyntaxContext)>,
+    param_value_refs: &ParamValueRefs,
     preserve_arg_list: bool,
     params_map_arguments: bool,
     param_at: F,
@@ -323,6 +324,9 @@ where
     // suffix renames, but avoids producing a param name that is shadowed at a
     // nested use site after codegen.
     let mut taken_for_suffix: HashSet<Atom> = collect_all_binding_names(body);
+    // Renames also reach default expressions. Reserve all their names,
+    // including nested bindings and free references, before choosing a suffix.
+    taken_for_suffix.extend(param_value_refs.names.iter().cloned());
     for i in 0..param_count {
         if let Some((sym, _)) = param_at(i) {
             taken_for_suffix.insert(sym);
@@ -384,7 +388,7 @@ where
                 if !preserve_arg_list
                     && !eval_observes_mapped_arguments
                     && !binding_uses.has_declaration(&param_binding)
-                    && !param_value_refs.contains(&param_binding) =>
+                    && !param_value_refs.refs.contains(&param_binding) =>
             {
                 let kind = if binding_uses.has_direct_write(&param_binding) {
                     VarDeclKind::Let
@@ -404,43 +408,49 @@ where
 /// Rename every identifier of a planned parameter rename by `(sym, ctxt)`:
 /// the parameter binding itself, its reads in the body, and its reads inside
 /// sibling parameter defaults and patterns (`(e, t, r = t) => …`). Only the
-/// sym changes; the ctxt is kept so the inner binding stays distinct.
+/// binding name changes; shorthand keys stay intact and the ctxt is kept.
 fn apply_rename_rewrites<P>(params: &mut P, body: &mut FunctionBody, plan: &RewritePlan)
 where
-    P: VisitMutWith<RenameIdent>,
+    P: VisitMutWith<BindingRenamer>,
 {
-    for (_, old_sym, new_sym, param_ctxt) in &plan.renames {
-        let mut renamer = RenameIdent {
-            old_sym: old_sym.clone(),
-            new_sym: new_sym.clone(),
-            target_ctxt: *param_ctxt,
-        };
-        params.visit_mut_with(&mut renamer);
-        body.visit_mut_with(&mut renamer);
-    }
+    let renames: Vec<BindingRename> = plan
+        .renames
+        .iter()
+        .map(|(_, old, new, ctxt)| BindingRename {
+            old: (old.clone(), *ctxt),
+            new: new.clone(),
+        })
+        .collect();
+    rename_bindings(params, &renames);
+    rename_bindings(body, &renames);
 }
 
 /// Bindings read inside the parameter list itself: default expressions and
 /// computed pattern keys. Binding positions are declarations, not reads.
-fn collect_param_value_refs<P>(params: &P) -> HashSet<(Atom, SyntaxContext)>
+fn collect_param_value_refs<P>(params: &P) -> ParamValueRefs
 where
     P: VisitWith<ParamValueRefs>,
 {
     let mut collector = ParamValueRefs {
         refs: HashSet::new(),
+        names: HashSet::new(),
     };
     params.visit_with(&mut collector);
-    collector.refs
+    collector
 }
 
 struct ParamValueRefs {
     refs: HashSet<(Atom, SyntaxContext)>,
+    names: HashSet<Atom>,
 }
 
 impl Visit for ParamValueRefs {
-    fn visit_binding_ident(&mut self, _: &BindingIdent) {}
+    fn visit_binding_ident(&mut self, binding: &BindingIdent) {
+        self.names.insert(binding.id.sym.clone());
+    }
 
     fn visit_ident(&mut self, ident: &Ident) {
+        self.names.insert(ident.sym.clone());
         self.refs.insert((ident.sym.clone(), ident.ctxt));
     }
 }
@@ -585,22 +595,6 @@ fn make_literal_decl(name: Atom, binding_ctxt: SyntaxContext, lit: Lit, kind: Va
             definite: false,
         }],
     })))
-}
-
-struct RenameIdent {
-    old_sym: Atom,
-    new_sym: Atom,
-    /// Match by (sym, ctxt) so a same-named binding in a nested scope is not
-    /// rewritten when we rename the IIFE param to an arg-derived alias.
-    target_ctxt: SyntaxContext,
-}
-
-impl VisitMut for RenameIdent {
-    fn visit_mut_ident(&mut self, ident: &mut Ident) {
-        if ident.sym == self.old_sym && ident.ctxt == self.target_ctxt {
-            ident.sym = self.new_sym.clone();
-        }
-    }
 }
 
 fn body_uses_own_arguments(body: &FunctionBody) -> bool {
