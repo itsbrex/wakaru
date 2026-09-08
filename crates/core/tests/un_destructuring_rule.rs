@@ -1285,3 +1285,28 @@ var keys = { [_tmp]: foo };
 "#;
     assert_eq_normalized(&apply(input), input);
 }
+
+#[test]
+fn uninitialized_decl_still_written_outside_the_group_is_kept() {
+    // `n` is the temp of the folded `wait` read, but `i = (n = e).transport`
+    // also writes it. A write is a use: removing `let n` leaves an assignment
+    // to an undeclared name.
+    let input = r#"
+function Ur(e) {
+  let n;
+  let t;
+  let i, u, a, c;
+  i = (n = e).transport;
+  u = e.endpoint;
+  t = e.size;
+  a = t === undefined ? 10 : t;
+  c = (n = e.wait) === undefined ? 1000 : n;
+  return [i, u, a, c];
+}
+"#;
+    let output = apply(input);
+    assert!(output.contains("wait: c = 1000"), "{output}");
+    assert!(output.contains("(n = e).transport"), "{output}");
+    assert!(output.contains("let n;"), "{output}");
+    assert!(!output.contains("let t;"), "{output}");
+}

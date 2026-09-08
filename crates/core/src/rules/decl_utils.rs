@@ -3,8 +3,9 @@ use std::collections::HashSet;
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Span, SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
-    BindingIdent, Decl, Expr, Function, FunctionBody, Id, Ident, Lit, MethodKind, ObjectLit, Param,
-    Pat, Prop, PropName, PropOrSpread, Stmt, VarDecl, VarDeclKind,
+    ArrowExpr, AssignTarget, BindingIdent, Decl, Expr, ForHead, Function, FunctionBody, Id, Ident,
+    Lit, MethodKind, ObjectLit, Param, Pat, Prop, PropName, PropOrSpread, Stmt, VarDecl,
+    VarDeclKind,
 };
 use swc_core::ecma::utils::find_pat_ids;
 use swc_core::ecma::visit::{Visit, VisitWith};
@@ -365,13 +366,57 @@ where
         target: &'a Ident,
         matches_ident: F,
         found: bool,
+        /// Inside an assignment target or `for (x in …)` head, where a
+        /// `BindingIdent` is a write to an existing binding, not a declaration.
+        in_write_target: bool,
+    }
+
+    impl<F> UseFinder<'_, F>
+    where
+        F: Fn(&Ident, &Ident) -> bool + Copy,
+    {
+        fn visit_write_target<N: VisitWith<Self>>(&mut self, node: &N) {
+            let previous = std::mem::replace(&mut self.in_write_target, true);
+            node.visit_children_with(self);
+            self.in_write_target = previous;
+        }
     }
 
     impl<F> Visit for UseFinder<'_, F>
     where
         F: Fn(&Ident, &Ident) -> bool + Copy,
     {
-        fn visit_binding_ident(&mut self, _: &BindingIdent) {}
+        // A declaration is not a use, but a write to the binding still needs
+        // the declaration: `n = e` with `let n` removed is an undeclared
+        // assignment.
+        fn visit_binding_ident(&mut self, binding: &BindingIdent) {
+            if self.in_write_target && (self.matches_ident)(&binding.id, self.target) {
+                self.found = true;
+            }
+        }
+
+        fn visit_assign_target(&mut self, target: &AssignTarget) {
+            self.visit_write_target(target);
+        }
+
+        fn visit_for_head(&mut self, head: &ForHead) {
+            match head {
+                ForHead::Pat(_) => self.visit_write_target(head),
+                _ => head.visit_children_with(self),
+            }
+        }
+
+        fn visit_function(&mut self, function: &Function) {
+            let previous = std::mem::replace(&mut self.in_write_target, false);
+            function.visit_children_with(self);
+            self.in_write_target = previous;
+        }
+
+        fn visit_arrow_expr(&mut self, arrow: &ArrowExpr) {
+            let previous = std::mem::replace(&mut self.in_write_target, false);
+            arrow.visit_children_with(self);
+            self.in_write_target = previous;
+        }
 
         fn visit_ident(&mut self, ident: &Ident) {
             if (self.matches_ident)(ident, self.target) {
@@ -383,6 +428,7 @@ where
     let mut finder = UseFinder {
         target,
         matches_ident,
+        in_write_target: false,
         found: false,
     };
     for stmt in stmts {
