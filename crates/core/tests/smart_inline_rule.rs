@@ -1754,3 +1754,42 @@ export { qo as Text, Yo };
     assert!(output.contains("const qo = Uo"), "{output}");
     assert!(output.contains("export { qo as Text, Yo }"), "{output}");
 }
+
+#[test]
+fn generated_alias_used_in_a_later_statement_run_is_kept() {
+    // The `import` splits the module body into two statement runs. The alias
+    // has one use in its own run and another in the function declared after
+    // the import; inlining it would leave that later use dangling.
+    let input = r#"
+const To = create();
+const Ko1 = To;
+const Po = uo(Ko1);
+import x from "./x.js";
+function View() {
+  return render(Ko1, x);
+}
+export { Po, View };
+"#;
+    let output = apply(input);
+    assert!(output.contains("const Ko1 = To"), "{output}");
+    assert!(output.contains("render(Ko1, x)"), "{output}");
+}
+
+#[test]
+fn alias_used_as_a_jsx_tag_keeps_its_declaration() {
+    // The temp inliner rewrites expression positions; a JSX tag name is not
+    // one. Counting the tag as the single use and then removing the
+    // declaration leaves `<I/>` naming nothing.
+    let input = r#"
+function View({ TypographyComponent, rest }) {
+  if (TypographyComponent) {
+    const I = TypographyComponent;
+    return <I Component="div" {...rest}/>;
+  }
+  return null;
+}
+"#;
+    let output = apply(input);
+    assert!(output.contains("const I = TypographyComponent"), "{output}");
+    assert!(output.contains("<I Component"), "{output}");
+}

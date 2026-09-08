@@ -5,10 +5,10 @@ use swc_core::common::{Mark, Span, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayPat, ArrowExpr, ArrowFunctionBody, AssignExpr, AssignOp, AssignTarget, BindingIdent,
     Callee, CatchClause, ComputedPropName, Constructor, Decl, Expr, ExprStmt, ForInStmt, ForOfStmt,
-    Function, GetterProp, Ident, ImportSpecifier, KeyValuePatProp, Lit, MemberExpr, MemberProp,
-    Module, ModuleExportName, ModuleItem, Number, ObjectPat, ObjectPatProp, Pat, PropName,
-    SetterProp, SimpleAssignTarget, StaticBlock, Stmt, VarDecl, VarDeclKind, VarDeclarator,
-    WithStmt,
+    Function, GetterProp, Ident, ImportSpecifier, JSXElementName, JSXObject, KeyValuePatProp, Lit,
+    MemberExpr, MemberProp, Module, ModuleExportName, ModuleItem, Number, ObjectPat, ObjectPatProp,
+    Pat, PropName, SetterProp, SimpleAssignTarget, StaticBlock, Stmt, VarDecl, VarDeclKind,
+    VarDeclarator, WithStmt,
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
@@ -364,6 +364,29 @@ impl SmartInline {
 // Main processing pipeline per statement list
 // ============================================================
 
+/// Every identifier reference in the module by binding key, declarations
+/// included. Object keys are `IdentName`s and do not count.
+fn count_module_ident_refs(body: &[ModuleItem]) -> HashMap<BindingKey, usize> {
+    struct Counter {
+        counts: HashMap<BindingKey, usize>,
+    }
+
+    impl Visit for Counter {
+        fn visit_ident(&mut self, ident: &Ident) {
+            *self
+                .counts
+                .entry((ident.sym.clone(), ident.ctxt))
+                .or_insert(0) += 1;
+        }
+    }
+
+    let mut counter = Counter {
+        counts: HashMap::new(),
+    };
+    body.visit_with(&mut counter);
+    counter.counts
+}
+
 fn process_module_stmt_runs(
     body: &mut Vec<ModuleItem>,
     level: RewriteLevel,
@@ -372,6 +395,11 @@ fn process_module_stmt_runs(
     exported_bindings: &HashSet<BindingKey>,
     initialized_bindings: &HashSet<BindingKey>,
 ) {
+    // Runs are analyzed one at a time, but a module-level `const` is visible
+    // to every later run and to the module declarations between them. Count
+    // every reference once so a run can tell when a candidate is also used
+    // outside it (a JSX tag in a component declared after an `import`).
+    let module_ref_counts = count_module_ident_refs(body);
     let mut new_body = Vec::with_capacity(body.len());
     let mut run = Vec::new();
 
@@ -387,6 +415,7 @@ fn process_module_stmt_runs(
                     use_state_bindings,
                     exported_bindings,
                     initialized_bindings,
+                    &module_ref_counts,
                 );
                 new_body.push(other);
             }
@@ -400,11 +429,13 @@ fn process_module_stmt_runs(
         use_state_bindings,
         exported_bindings,
         initialized_bindings,
+        &module_ref_counts,
     );
 
     *body = new_body;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn flush_stmt_run(
     new_body: &mut Vec<ModuleItem>,
     run: &mut Vec<Stmt>,
@@ -413,19 +444,21 @@ fn flush_stmt_run(
     use_state_bindings: &HashSet<BindingKey>,
     exported_bindings: &HashSet<BindingKey>,
     initialized_bindings: &HashSet<BindingKey>,
+    module_ref_counts: &HashMap<BindingKey, usize>,
 ) {
     if run.is_empty() {
         return;
     }
 
     new_body.extend(
-        process_stmts(
+        process_stmts_in_module_run(
             std::mem::take(run),
             level,
             unresolved_mark,
             use_state_bindings,
             exported_bindings,
             initialized_bindings,
+            Some(module_ref_counts),
         )
         .into_iter()
         .map(ModuleItem::Stmt),
@@ -439,6 +472,30 @@ fn process_stmts(
     use_state_bindings: &HashSet<BindingKey>,
     exported_bindings: &HashSet<BindingKey>,
     initialized_bindings: &HashSet<BindingKey>,
+) -> Vec<Stmt> {
+    process_stmts_in_module_run(
+        stmts,
+        level,
+        unresolved_mark,
+        use_state_bindings,
+        exported_bindings,
+        initialized_bindings,
+        None,
+    )
+}
+
+/// `module_ref_counts` is present for a top-level statement run: the count of
+/// every identifier reference in the whole module, so the temp-var inliner can
+/// see uses outside the run. A function or block body has none: its lexical
+/// declarations cannot be referenced from outside it.
+fn process_stmts_in_module_run(
+    stmts: Vec<Stmt>,
+    level: RewriteLevel,
+    unresolved_mark: Option<Mark>,
+    use_state_bindings: &HashSet<BindingKey>,
+    exported_bindings: &HashSet<BindingKey>,
+    initialized_bindings: &HashSet<BindingKey>,
+    module_ref_counts: Option<&HashMap<BindingKey, usize>>,
 ) -> Vec<Stmt> {
     // Pass 0: inline builtin global aliases (const x = Math.floor → replace x with Math.floor)
     // Standard+ only; this assumes globals and builtin properties are not patched
@@ -461,6 +518,7 @@ fn process_stmts(
         stmts,
         initialized_bindings,
         exported_bindings,
+        module_ref_counts,
         unresolved_mark,
     );
     // Pass 1a: forward adjacent assignment aliases created by async/state-machine
@@ -668,6 +726,7 @@ fn inline_temp_vars(
     stmts: Vec<Stmt>,
     initialized_bindings: &HashSet<BindingKey>,
     exported_bindings: &HashSet<BindingKey>,
+    module_ref_counts: Option<&HashMap<BindingKey, usize>>,
     unresolved_mark: Option<Mark>,
 ) -> Vec<Stmt> {
     // Collect generated-looking `const t = e` aliases. Existing `let`
@@ -724,13 +783,19 @@ fn inline_temp_vars(
 
     let analysis = TempUsageAnalysis::collect(&stmts, &candidates, initialized_bindings);
 
-    // Build set of names to inline (exactly 1 top-level use).
+    // Build set of names to inline (exactly 1 top-level use). The module-wide
+    // count includes the declaration itself; anything above the run's one use
+    // plus that declaration is a reference in another run or module
+    // declaration, which the inliner would leave dangling.
     let to_inline: HashMap<BindingKey, Box<Expr>> = candidates
         .into_iter()
         .filter(|(key, candidate)| {
-            analysis
-                .candidate(key)
-                .is_some_and(|usage| usage.can_inline(candidate, &analysis))
+            analysis.candidate(key).is_some_and(|usage| {
+                usage.can_inline(candidate, &analysis)
+                    && module_ref_counts.is_none_or(|counts| {
+                        counts.get(key).copied().unwrap_or(0) <= usage.ref_count + 1
+                    })
+            })
         })
         .map(|(key, candidate)| (key, candidate.init))
         .collect();
@@ -1092,6 +1157,10 @@ struct TempUsageInfo {
     // a `const`, but keep the guard so rewriting malformed or partially
     // transformed input cannot move the write onto the source binding.
     mutated: bool,
+    // The candidate names a JSX tag (`<I/>`, `<I.Item/>`). The inliner
+    // rewrites expression positions only, so that use would keep the old name
+    // after the declaration is removed.
+    used_as_jsx_name: bool,
 }
 
 impl TempUsageInfo {
@@ -1107,6 +1176,7 @@ impl TempUsageInfo {
             || self.source_name_shadowed_at_use
             || self.dynamic_scope
             || self.mutated
+            || self.used_as_jsx_name
         {
             return false;
         }
@@ -1319,6 +1389,20 @@ impl Visit for TempUsageCollector<'_> {
         }
     }
 
+    fn visit_jsx_element_name(&mut self, name: &JSXElementName) {
+        let root = match name {
+            JSXElementName::Ident(id) => Some(id),
+            JSXElementName::JSXMemberExpr(member) => jsx_object_root(&member.obj),
+            JSXElementName::JSXNamespacedName(_) => None,
+        };
+        if let Some(id) = root {
+            if let Some(usage) = self.analysis.usage.get_mut(&(id.sym.clone(), id.ctxt)) {
+                usage.used_as_jsx_name = true;
+            }
+        }
+        name.visit_children_with(self);
+    }
+
     fn visit_assign_expr(&mut self, assign: &swc_core::ecma::ast::AssignExpr) {
         use swc_core::ecma::ast::{AssignTarget, SimpleAssignTarget};
 
@@ -1513,6 +1597,13 @@ fn collect_pat_write_ids(pat: &Pat, out: &mut HashSet<BindingKey>) {
             }
         }
         Pat::Invalid(_) => {}
+    }
+}
+
+fn jsx_object_root(obj: &JSXObject) -> Option<&Ident> {
+    match obj {
+        JSXObject::Ident(id) => Some(id),
+        JSXObject::JSXMemberExpr(member) => jsx_object_root(&member.obj),
     }
 }
 
