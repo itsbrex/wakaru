@@ -651,6 +651,15 @@ fn build_shadow_avoidance_renames(
         replacement.sym = new_name;
     }
 
+    // The base binding is renamed module-wide, so every getter that reads a
+    // renamed base must follow it, not only the getters whose own use sites
+    // were shadowed. Replacements renamed above no longer carry the old key.
+    for replacement in to_inline.values_mut() {
+        if let Some(new_name) = base_renames.get(&binding_key(replacement)) {
+            replacement.sym = new_name.clone();
+        }
+    }
+
     base_renames
         .into_iter()
         .map(|(old, new)| BindingRename { old, new })

@@ -528,3 +528,29 @@ const keys = { [ns.version]: 1 };
     assert!(output.contains("ns = require.t(react, 2)"), "{output}");
     assert!(output.contains("[ns.version]: 1"), "{output}");
 }
+
+#[test]
+fn base_rename_reaches_getters_whose_uses_are_not_shadowed() {
+    // One getter is used where a local `r` shadows the base, which forces the
+    // base to be renamed module-wide. The other getter's replacement must
+    // follow that rename, or it points at a name that no longer exists.
+    let input = r#"
+var r = require("./path-to-regexp");
+var o = () => r && r.__esModule ? r.default : r;
+var i = () => r && r.__esModule ? r.default : r;
+function compile(pattern, options) {
+  var r = {};
+  return o()(pattern, [], options);
+}
+var parse = i().parse;
+"#;
+    let expected = r#"
+var _r = require("./path-to-regexp");
+function compile(pattern, options) {
+  var r = {};
+  return _r(pattern, [], options);
+}
+var parse = _r.parse;
+"#;
+    assert_eq_normalized(&render(input), expected.trim());
+}
