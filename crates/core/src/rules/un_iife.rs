@@ -197,18 +197,18 @@ fn process_params_and_args(
     body: &mut FunctionBody,
     preserve_arg_list: bool,
 ) {
-    let plan = plan_param_rewrites(params.len(), args, body, preserve_arg_list, true, |i| {
-        pat_ident(&params[i].pat).map(|id| (id.sym.clone(), id.ctxt))
-    });
+    let param_value_refs = collect_param_value_refs(params);
+    let plan = plan_param_rewrites(
+        params.len(),
+        args,
+        body,
+        &param_value_refs,
+        preserve_arg_list,
+        true,
+        |i| pat_ident(&params[i].pat).map(|id| (id.sym.clone(), id.ctxt)),
+    );
 
-    // Apply renames in place: param keeps its own ctxt, only the sym changes.
-    for (i, _, new_sym, _) in &plan.renames {
-        if let Pat::Ident(bi) = &mut params[*i].pat {
-            bi.id.sym = new_sym.clone();
-        }
-    }
-
-    apply_body_rewrites(body, &plan);
+    apply_rename_rewrites(params, body, &plan);
 
     // Process literal inserts: collect indices to remove, then drop params/args
     // in reverse-index order.
@@ -230,17 +230,18 @@ fn process_arrow_params_and_args(
     body: &mut FunctionBody,
     preserve_arg_list: bool,
 ) {
-    let plan = plan_param_rewrites(params.len(), args, body, preserve_arg_list, false, |i| {
-        pat_ident(&params[i]).map(|id| (id.sym.clone(), id.ctxt))
-    });
+    let param_value_refs = collect_param_value_refs(params);
+    let plan = plan_param_rewrites(
+        params.len(),
+        args,
+        body,
+        &param_value_refs,
+        preserve_arg_list,
+        false,
+        |i| pat_ident(&params[i]).map(|id| (id.sym.clone(), id.ctxt)),
+    );
 
-    for (i, _, new_sym, _) in &plan.renames {
-        if let Pat::Ident(bi) = &mut params[*i] {
-            bi.id.sym = new_sym.clone();
-        }
-    }
-
-    apply_body_rewrites(body, &plan);
+    apply_rename_rewrites(params, body, &plan);
 
     let mut to_remove: Vec<usize> = plan.literal_inserts.iter().map(|(i, ..)| *i).collect();
     to_remove.sort();
@@ -278,6 +279,7 @@ fn plan_param_rewrites<F>(
     param_count: usize,
     args: &[ExprOrSpread],
     body: &FunctionBody,
+    param_value_refs: &HashSet<(Atom, SyntaxContext)>,
     preserve_arg_list: bool,
     params_map_arguments: bool,
     param_at: F,
@@ -375,11 +377,14 @@ where
             // A body declaration with the parameter's resolved binding ID is a
             // same-binding `var`/function redeclaration. Removing the parameter
             // and inserting a lexical declaration would either create an early
-            // error or change the redeclaration semantics.
+            // error or change the redeclaration semantics. A sibling parameter
+            // default or pattern that reads the parameter cannot see a body
+            // declaration at all, so the parameter must stay.
             Expr::Lit(lit)
                 if !preserve_arg_list
                     && !eval_observes_mapped_arguments
-                    && !binding_uses.has_declaration(&param_binding) =>
+                    && !binding_uses.has_declaration(&param_binding)
+                    && !param_value_refs.contains(&param_binding) =>
             {
                 let kind = if binding_uses.has_direct_write(&param_binding) {
                     VarDeclKind::Let
@@ -396,15 +401,47 @@ where
     plan
 }
 
-fn apply_body_rewrites(body: &mut FunctionBody, plan: &RewritePlan) {
-    // Rename refs (sym only; keep ctxt so the inner binding stays distinct).
+/// Rename every identifier of a planned parameter rename by `(sym, ctxt)`:
+/// the parameter binding itself, its reads in the body, and its reads inside
+/// sibling parameter defaults and patterns (`(e, t, r = t) => …`). Only the
+/// sym changes; the ctxt is kept so the inner binding stays distinct.
+fn apply_rename_rewrites<P>(params: &mut P, body: &mut FunctionBody, plan: &RewritePlan)
+where
+    P: VisitMutWith<RenameIdent>,
+{
     for (_, old_sym, new_sym, param_ctxt) in &plan.renames {
         let mut renamer = RenameIdent {
             old_sym: old_sym.clone(),
             new_sym: new_sym.clone(),
             target_ctxt: *param_ctxt,
         };
+        params.visit_mut_with(&mut renamer);
         body.visit_mut_with(&mut renamer);
+    }
+}
+
+/// Bindings read inside the parameter list itself: default expressions and
+/// computed pattern keys. Binding positions are declarations, not reads.
+fn collect_param_value_refs<P>(params: &P) -> HashSet<(Atom, SyntaxContext)>
+where
+    P: VisitWith<ParamValueRefs>,
+{
+    let mut collector = ParamValueRefs {
+        refs: HashSet::new(),
+    };
+    params.visit_with(&mut collector);
+    collector.refs
+}
+
+struct ParamValueRefs {
+    refs: HashSet<(Atom, SyntaxContext)>,
+}
+
+impl Visit for ParamValueRefs {
+    fn visit_binding_ident(&mut self, _: &BindingIdent) {}
+
+    fn visit_ident(&mut self, ident: &Ident) {
+        self.refs.insert((ident.sym.clone(), ident.ctxt));
     }
 }
 

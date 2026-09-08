@@ -838,3 +838,34 @@ function run(xs) {
 "#;
     assert_eq_normalized(&apply_rule(input), expected);
 }
+
+#[test]
+fn renamed_param_stays_visible_to_a_later_param_default() {
+    // The default `r = t` reads a sibling parameter. Renaming `t` to
+    // `locale_1` must rewrite that read too, or the default dangles.
+    let input = r#"
+((e, t, r = t, n) => {
+  if (!a(e)) return e;
+  return t !== r && n != null ? u(e, n) : e;
+})(href, locale, g, prefix);
+"#;
+    let expected = r#"
+((href_1, locale_1, r = locale_1, prefix_1) => {
+  if (!a(href_1)) return href_1;
+  return locale_1 !== r && prefix_1 != null ? u(href_1, prefix_1) : href_1;
+})(href, locale, g, prefix);
+"#;
+    assert_eq_normalized(&apply_rule(input), expected);
+}
+
+#[test]
+fn literal_param_read_by_a_later_param_default_stays_a_param() {
+    // Extracting `e` into a body `const` would leave the default `t = e`
+    // reading an undeclared name: parameter defaults cannot see body bindings.
+    let input = r#"
+(function(e, t = e) {
+  use(e, t);
+})(1, x);
+"#;
+    assert_eq_normalized(&apply_rule(input), input);
+}
