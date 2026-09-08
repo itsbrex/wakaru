@@ -182,6 +182,12 @@ Do not describe pending checks as passed or rerun an unchanged suite merely
 because a new reviewer took over. This avoids duplicate execution; it does not
 remove the required verification for changed code.
 
+Verification evidence and commit messages are different audiences. The
+evidence record may name the inputs a bug was found in and cite counts; it
+stays in the handoff. The commit message describes the mechanism and the
+code shape: no bundle or module names, paths, ids, counts of affected
+modules or references, or test-run tallies.
+
 ## Running Checks From a Worktree
 
 All Cargo commands should be run from the wakaru worktree that contains the

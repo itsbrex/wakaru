@@ -194,7 +194,8 @@ under that document's handoff rules.
    - Use the relevant package or `cargo clippy --workspace --all-targets -- -D warnings` when touching other crates or shared workspace code
 6. If snapshots change, inspect the diff — confirm the output is semantically better, not just different
 7. If your change makes any statement in `docs/` (or this file) false, fix the doc in the same commit — agents trust the docs, so a wrong doc is worse than a missing one
-8. `git status --short` — no stale `.snap.new` files or unrelated changes
+8. Re-read the commit message: mechanism and code shape only, nothing about where the bug was found (see rule 7 below)
+9. `git status --short` — no stale `.snap.new` files or unrelated changes
 
 ## Important Rules
 
@@ -204,6 +205,7 @@ under that document's handoff rules.
 4. **Formatting must pass, but don't format opportunistically** — run `cargo fmt --check`; if formatting is needed, keep it limited to files you intentionally changed and avoid unrelated rustfmt churn.
 5. **Inspect snapshot diffs** — "different" without "better" is a regression.
 6. **Be honest about what works** — never overstate what was accomplished.
+7. **Commit messages describe the mechanism and the code shape** — what the rule did wrong, the input shape that triggers it, and the fix. Leave out where the bug was found: no bundle or module names, no paths or ids, no counts of affected modules or references, no test-run tallies.
 
 ## Code Review Self-Check
 
