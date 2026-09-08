@@ -215,7 +215,9 @@ impl UnJsx {
 
         let mut tag = self.to_jsx_element_name(type_expr);
         if let Some(inlined) = self.inline_const_string_tag(type_expr) {
-            tag = self.to_jsx_element_name(&Expr::Lit(Lit::Str(inlined)));
+            tag = self
+                .to_jsx_element_name(&Expr::Lit(Lit::Str(inlined)))
+                .or(tag);
         }
 
         if tag.is_none() {
@@ -386,6 +388,10 @@ impl UnJsx {
     fn to_jsx_element_name(&self, expr: &Expr) -> Option<JSXElementName> {
         match expr {
             Expr::Lit(Lit::Str(s)) => jsx_name_from_string(s, self.unresolved_mark),
+            Expr::Tpl(_) => {
+                let value = no_substitution_template_str(expr)?;
+                jsx_name_from_string(&value, self.unresolved_mark)
+            }
             Expr::Ident(ident) => Some(JSXElementName::Ident(ident.clone())),
             Expr::Member(member) => self.member_expr_to_jsx_name(member),
             _ => None,
@@ -871,11 +877,16 @@ impl Visit for ConstStringCollector {
             let Some(init) = &decl.init else {
                 continue;
             };
-            let Expr::Lit(Lit::Str(value)) = init.as_ref() else {
-                continue;
+            let value = match init.as_ref() {
+                Expr::Lit(Lit::Str(value)) => value.clone(),
+                Expr::Tpl(_) => match no_substitution_template_str(init) {
+                    Some(value) => value,
+                    None => continue,
+                },
+                _ => continue,
             };
             self.values
-                .insert((binding.id.sym.clone(), binding.id.ctxt), value.clone());
+                .insert((binding.id.sym.clone(), binding.id.ctxt), value);
         }
     }
 }
@@ -1557,21 +1568,53 @@ fn get_pragma(
 fn is_capitalization_invalid(expr: &Expr) -> bool {
     match expr {
         Expr::Lit(Lit::Str(s)) => !starts_with_lowercase(&wtf8_to_string(&s.value)),
+        Expr::Tpl(_) => no_substitution_template_str(expr)
+            .is_some_and(|s| !starts_with_lowercase(&wtf8_to_string(&s.value))),
         Expr::Ident(ident) => starts_with_lowercase(ident.sym.as_ref()),
         _ => false,
     }
+}
+
+/// A template literal with no substitutions is a string tag spelled with
+/// backticks (`` createElement(`div`, …) ``): the tag is that one cooked
+/// segment. A template with substitutions, or one whose segment has no cooked
+/// value (an invalid escape), is not a string.
+fn no_substitution_template_str(expr: &Expr) -> Option<Str> {
+    let Expr::Tpl(tpl) = expr else {
+        return None;
+    };
+    if !tpl.exprs.is_empty() || tpl.quasis.len() != 1 {
+        return None;
+    }
+    let cooked = tpl.quasis[0].cooked.as_ref()?;
+    Some(Str {
+        span: tpl.span,
+        value: cooked.clone(),
+        raw: None,
+    })
 }
 
 /// The resolver gives a lowercase element name the unresolved mark (it is an
 /// intrinsic tag, not a binding); a name built from a string follows suit.
 fn jsx_name_from_string(value: &Str, unresolved_mark: Mark) -> Option<JSXElementName> {
     let value_string = wtf8_to_string(&value.value);
+    // String tags must remain intrinsic names after printing. In particular,
+    // a dot would turn the tag into a component member expression in JSX.
+    if !starts_with_lowercase(&value_string) {
+        return None;
+    }
     if let Some((ns, name)) = value_string.split_once(':') {
+        if !is_valid_jsx_identifier(ns) || !is_valid_jsx_identifier(name) {
+            return None;
+        }
         return Some(JSXElementName::JSXNamespacedName(JSXNamespacedName {
             span: DUMMY_SP,
             ns: ns.into(),
             name: name.into(),
         }));
+    }
+    if !is_valid_jsx_identifier(&value_string) {
+        return None;
     }
     let ctxt = if value_string.starts_with(|c: char| c.is_ascii_lowercase()) {
         SyntaxContext::empty().apply_mark(unresolved_mark)

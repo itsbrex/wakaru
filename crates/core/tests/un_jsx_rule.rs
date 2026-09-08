@@ -801,3 +801,109 @@ class Panel {
         "{output}"
     );
 }
+
+#[test]
+fn no_substitution_template_literal_tag_is_a_string_tag() {
+    // `` createElement(`div`, …) `` names the intrinsic element the same way
+    // `createElement("div", …)` does; it was aliased as `const Component = \`div\``
+    // before.
+    let input = r#"
+function App() {
+  return React.createElement(`div`, { className: "a" }, "hello");
+}
+"#;
+    let expected = r#"
+function App() {
+  return <div className="a">hello</div>;
+}
+"#;
+    assert_eq_normalized(&render_with_level(input, RewriteLevel::Standard), expected);
+}
+
+#[test]
+fn const_template_literal_tag_is_inlined_like_a_string_const() {
+    // Whatever the string-const path does to the binding afterwards, the
+    // template spelling must come out the same.
+    let template = r#"
+const tag = `span`;
+function App() {
+  return React.createElement(tag, null, "hello");
+}
+"#;
+    let string = template.replace("`span`", "\"span\"");
+    let template_output = render_with_level(template, RewriteLevel::Standard);
+    assert!(
+        template_output.contains("<span>hello</span>"),
+        "{template_output}"
+    );
+    assert_eq_normalized(
+        &template_output.replace("`span`", "\"span\""),
+        &render_with_level(&string, RewriteLevel::Standard),
+    );
+}
+
+#[test]
+fn template_literal_tag_keeps_the_string_capitalization_rule() {
+    // A capitalized string tag names a component by string, which JSX cannot
+    // express; the template spelling is rejected the same way.
+    let input = r#"
+function App() {
+  return React.createElement(`Foo`, null, "hello");
+}
+"#;
+    assert_eq_normalized(&render_with_level(input, RewriteLevel::Aggressive), input);
+}
+
+#[test]
+fn template_literal_tag_with_substitution_is_not_a_string() {
+    let input = r#"
+function App(kind) {
+  return React.createElement(`h${kind}`, null, "hello");
+}
+"#;
+    let output = render_with_level(input, RewriteLevel::Standard);
+    assert!(output.contains("`h${kind}`"), "{output}");
+    assert!(!output.contains("<h"), "{output}");
+}
+
+#[test]
+fn unrepresentable_string_tags_preserve_the_runtime_tag() {
+    for tag in ["x.y", "x y", "x/y", "svg:", "svg:x:y"] {
+        for literal in [format!("\"{tag}\""), format!("`{tag}`")] {
+            let input = format!(
+                "function App() {{ return React.createElement({literal}, null, \"hello\"); }}"
+            );
+            let expected = format!(
+                "function App() {{ const Component = {literal}; return <Component>hello</Component>; }}"
+            );
+            assert_eq_normalized(&render_with_level(&input, RewriteLevel::Standard), &input);
+            assert_eq_normalized(
+                &render_with_level(&input, RewriteLevel::Aggressive),
+                &expected,
+            );
+        }
+    }
+}
+
+#[test]
+fn valid_string_tags_keep_intrinsic_and_namespace_names() {
+    for (literal, tag) in [
+        ("`my-widget`", "my-widget"),
+        ("`svg:path`", "svg:path"),
+        (r#"`d\u0069v`"#, "div"),
+    ] {
+        let input = format!("function App() {{ return React.createElement({literal}, null); }}");
+        let expected = format!("function App() {{ return <{tag} />; }}");
+        assert_eq_normalized(
+            &render_with_level(&input, RewriteLevel::Standard),
+            &expected,
+        );
+    }
+}
+
+#[test]
+fn unrepresentable_const_string_tag_keeps_its_runtime_value() {
+    let input = "const tag = `x.y`; function App() { return React.createElement(tag, null); }";
+    let expected = "const Tag = `x.y`; function App() { return <Tag />; }";
+    assert_eq_normalized(&render_with_level(input, RewriteLevel::Standard), expected);
+}
