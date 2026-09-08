@@ -23,7 +23,7 @@ use super::decl_utils::{
     can_remove_prior_uninitialized_decls, remove_prior_uninitialized_decls, same_ident,
     UninitializedDeclKind,
 };
-use super::eval_utils::is_direct_eval_call;
+use super::eval_utils::{has_dynamic_scope_construct, is_direct_eval_call};
 use super::helper_matcher::BindingKey;
 use super::RewriteLevel;
 
@@ -35,6 +35,12 @@ pub struct SmartInline {
     /// declarations must survive: a specifier can only name a binding.
     exported_bindings: HashSet<BindingKey>,
     initialized_binding_scopes: Vec<HashSet<BindingKey>>,
+    /// Whether the current module contains a `with` statement or a direct
+    /// eval anywhere. Builtin-alias inlining reads the global at each former
+    /// use site, and a nested statement list (a `with` body, a function
+    /// inside one) cannot see the enclosing hazard on its own, so the
+    /// module-wide fact is carried down to every statement-list pass.
+    module_has_dynamic_scope: bool,
 }
 
 impl SmartInline {
@@ -45,6 +51,7 @@ impl SmartInline {
             use_state_bindings: HashSet::new(),
             exported_bindings: HashSet::new(),
             initialized_binding_scopes: Vec::new(),
+            module_has_dynamic_scope: false,
         }
     }
 
@@ -55,7 +62,12 @@ impl SmartInline {
             use_state_bindings: HashSet::new(),
             exported_bindings: HashSet::new(),
             initialized_binding_scopes: Vec::new(),
+            module_has_dynamic_scope: false,
         }
+    }
+
+    fn inlines_builtin_aliases(&self) -> bool {
+        self.level >= RewriteLevel::Standard && !self.module_has_dynamic_scope
     }
 }
 
@@ -74,6 +86,10 @@ impl VisitMut for SmartInline {
         let previous_exported_bindings = std::mem::replace(
             &mut self.exported_bindings,
             collect_local_export_specifier_keys(module),
+        );
+        let previous_module_has_dynamic_scope = std::mem::replace(
+            &mut self.module_has_dynamic_scope,
+            has_dynamic_scope_construct(module),
         );
 
         // Step 0a: Inline zero-param arrow ident wrappers (const X = () => Y) globally.
@@ -96,6 +112,7 @@ impl VisitMut for SmartInline {
         process_module_stmt_runs(
             &mut module.body,
             self.level,
+            self.inlines_builtin_aliases(),
             self.unresolved_mark,
             &self.use_state_bindings,
             &self.exported_bindings,
@@ -105,6 +122,7 @@ impl VisitMut for SmartInline {
         module.visit_mut_children_with(self);
         self.use_state_bindings = previous_use_state_bindings;
         self.exported_bindings = previous_exported_bindings;
+        self.module_has_dynamic_scope = previous_module_has_dynamic_scope;
     }
 
     fn visit_mut_stmts(&mut self, stmts: &mut Vec<Stmt>) {
@@ -113,6 +131,7 @@ impl VisitMut for SmartInline {
         *stmts = process_stmts(
             taken,
             self.level,
+            self.inlines_builtin_aliases(),
             self.unresolved_mark,
             &self.use_state_bindings,
             &self.exported_bindings,
@@ -390,6 +409,7 @@ fn count_module_ident_refs(body: &[ModuleItem]) -> HashMap<BindingKey, usize> {
 fn process_module_stmt_runs(
     body: &mut Vec<ModuleItem>,
     level: RewriteLevel,
+    inline_builtin_aliases: bool,
     unresolved_mark: Option<Mark>,
     use_state_bindings: &HashSet<BindingKey>,
     exported_bindings: &HashSet<BindingKey>,
@@ -411,6 +431,7 @@ fn process_module_stmt_runs(
                     &mut new_body,
                     &mut run,
                     level,
+                    inline_builtin_aliases,
                     unresolved_mark,
                     use_state_bindings,
                     exported_bindings,
@@ -425,6 +446,7 @@ fn process_module_stmt_runs(
         &mut new_body,
         &mut run,
         level,
+        inline_builtin_aliases,
         unresolved_mark,
         use_state_bindings,
         exported_bindings,
@@ -440,6 +462,7 @@ fn flush_stmt_run(
     new_body: &mut Vec<ModuleItem>,
     run: &mut Vec<Stmt>,
     level: RewriteLevel,
+    inline_builtin_aliases: bool,
     unresolved_mark: Option<Mark>,
     use_state_bindings: &HashSet<BindingKey>,
     exported_bindings: &HashSet<BindingKey>,
@@ -454,6 +477,7 @@ fn flush_stmt_run(
         process_stmts_in_module_run(
             std::mem::take(run),
             level,
+            inline_builtin_aliases,
             unresolved_mark,
             use_state_bindings,
             exported_bindings,
@@ -468,6 +492,7 @@ fn flush_stmt_run(
 fn process_stmts(
     stmts: Vec<Stmt>,
     level: RewriteLevel,
+    inline_builtin_aliases: bool,
     unresolved_mark: Option<Mark>,
     use_state_bindings: &HashSet<BindingKey>,
     exported_bindings: &HashSet<BindingKey>,
@@ -476,6 +501,7 @@ fn process_stmts(
     process_stmts_in_module_run(
         stmts,
         level,
+        inline_builtin_aliases,
         unresolved_mark,
         use_state_bindings,
         exported_bindings,
@@ -488,9 +514,14 @@ fn process_stmts(
 /// every identifier reference in the whole module, so the temp-var inliner can
 /// see uses outside the run. A function or block body has none: its lexical
 /// declarations cannot be referenced from outside it.
+/// `inline_builtin_aliases` is false below `standard` and whenever the module
+/// contains `with` or a direct eval: the statement list's own scan cannot see
+/// an enclosing hazard.
+#[allow(clippy::too_many_arguments)]
 fn process_stmts_in_module_run(
     stmts: Vec<Stmt>,
     level: RewriteLevel,
+    inline_builtin_aliases: bool,
     unresolved_mark: Option<Mark>,
     use_state_bindings: &HashSet<BindingKey>,
     exported_bindings: &HashSet<BindingKey>,
@@ -500,7 +531,7 @@ fn process_stmts_in_module_run(
     // Pass 0: inline builtin global aliases (const x = Math.floor → replace x with Math.floor)
     // Standard+ only; this assumes globals and builtin properties are not patched
     // between alias capture and use.
-    let stmts = if level >= RewriteLevel::Standard {
+    let stmts = if inline_builtin_aliases {
         inline_builtin_aliases_stmts(
             stmts,
             unresolved_mark,

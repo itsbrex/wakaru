@@ -1801,3 +1801,34 @@ fn no_builtin_alias_inline_when_module_has_dynamic_scope() {
         assert_eq_normalized(&apply(&input), &input);
     }
 }
+
+#[test]
+fn no_builtin_alias_inline_inside_a_with_body() {
+    // The statement-list pass sees only the `with` body, where the enclosing
+    // `with` is invisible; the module-wide hazard has to reach it. Inlining
+    // here would read `Object` from the `with` object once per use instead of
+    // once at the alias.
+    let input = r#"
+with ({ get Object() { log('lookup'); return globalThis.Object; } }) {
+    const freeze = Object.freeze;
+    log(freeze({}));
+    log(freeze({}));
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+    assert_eq_normalized(&apply_pipeline(input), input);
+}
+
+#[test]
+fn no_builtin_alias_inline_in_function_body_when_module_has_direct_eval() {
+    // A sloppy direct eval at module level can declare `Object` in the scope
+    // the function body resolves against; the body's own scan cannot see it.
+    let input = r#"
+eval(code);
+function run() {
+    const freeze = Object.freeze;
+    return [freeze({}), freeze({})];
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
