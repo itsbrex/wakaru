@@ -44,33 +44,30 @@ impl VisitMut for DeadDecls {
             return;
         }
 
-        let candidates: HashSet<BindingKey> = candidates_with_spans.keys().cloned().collect();
-        let alive = compute_alive(module, &candidates);
-
-        let mut dead: HashSet<BindingKey> = candidates
-            .into_iter()
-            .filter(|key| !alive.contains(key))
-            .collect();
+        let mut candidates: HashSet<BindingKey> = candidates_with_spans.keys().cloned().collect();
 
         if let Some(pre_dead_spans) = &self.pre_dead_spans {
-            dead.retain(|key| {
-                let info = candidates_with_spans
-                    .get(key)
-                    .copied()
-                    .unwrap_or(RemovableBinding {
-                        span: DUMMY_SP,
-                        preserve_in_delta: false,
-                    });
+            // Delta mode keeps a declaration that was already dead in the
+            // input. That declaration stays in the output, so everything it
+            // references must stay reachable: drop it from the candidates so
+            // `compute_alive` treats its references as roots instead of as
+            // edges from a removable node. Otherwise a helper whose live uses
+            // a rewrite consumed, and whose only remaining calls sit inside
+            // the preserved code, is removed while those calls survive.
+            candidates.retain(|key| {
+                let info = candidates_with_spans[key];
                 if info.preserve_in_delta {
                     return false;
                 }
-                let span = info.span;
-                if span == DUMMY_SP {
-                    return true;
-                }
-                !pre_dead_spans.contains(&(span.lo, span.hi))
+                info.span == DUMMY_SP || !pre_dead_spans.contains(&(info.span.lo, info.span.hi))
             });
         }
+
+        let alive = compute_alive(module, &candidates);
+        let dead: HashSet<BindingKey> = candidates
+            .into_iter()
+            .filter(|key| !alive.contains(key))
+            .collect();
 
         if dead.is_empty() {
             return;
