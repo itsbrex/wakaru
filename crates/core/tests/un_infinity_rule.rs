@@ -104,3 +104,20 @@ const a = 1 / 0;
     let output = render_pipeline_until(mentions, "UnInfinity");
     assert!(output.contains("const a = 1 / 0"), "{output}");
 }
+
+#[test]
+fn skips_module_with_non_variable_infinity_bindings() {
+    // A named function expression, a class name, or an import local also
+    // capture the printed `Infinity`; only `BindingIdent` forms were checked
+    // before, so `1 / 0 === Number.POSITIVE_INFINITY` flipped from true to
+    // false inside such a function.
+    for source in [
+        "(function Infinity() { log(1 / 0 === Number.POSITIVE_INFINITY); })();",
+        "class Infinity { static big() { return 1 / 0; } }",
+        "import Infinity from 'm'; const a = 1 / 0;",
+        "const C = class Infinity { big() { return -1 / 0; } };",
+    ] {
+        let output = render_pipeline_until(source, "UnInfinity");
+        assert!(output.contains("1 / 0"), "{source}\n{output}");
+    }
+}

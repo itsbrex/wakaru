@@ -1,8 +1,9 @@
 use swc_core::common::{Mark, SyntaxContext};
-use swc_core::ecma::ast::{BindingIdent, Expr, Ident, Lit, Module, Number, UnaryExpr, UnaryOp};
-use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+use swc_core::ecma::ast::{Expr, Ident, Lit, Module, Number, UnaryExpr, UnaryOp};
+use swc_core::ecma::visit::{VisitMut, VisitMutWith};
 
 use super::eval_utils::module_blocks_global_reference;
+use super::rename_utils::module_declares_binding_named;
 use crate::utils::paren::strip_parens;
 
 /// Rewrites `void <number>` back to `undefined`.
@@ -29,9 +30,7 @@ impl RemoveVoid {
 
 /// Whether any binding in the module is spelled `undefined`.
 fn declares_undefined_binding(module: &Module) -> bool {
-    let mut detector = UndefinedBindingDetector { found: false };
-    module.visit_with(&mut detector);
-    detector.found
+    module_declares_binding_named(module, "undefined")
 }
 
 impl VisitMut for RemoveVoid {
@@ -55,18 +54,6 @@ impl VisitMut for RemoveVoid {
 
 fn is_numeric_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::Lit(Lit::Num(_)))
-}
-
-struct UndefinedBindingDetector {
-    found: bool,
-}
-
-impl Visit for UndefinedBindingDetector {
-    fn visit_binding_ident(&mut self, binding: &BindingIdent) {
-        if binding.id.sym == "undefined" {
-            self.found = true;
-        }
-    }
 }
 
 /// Gives context-less `undefined` references the global's context, or spells

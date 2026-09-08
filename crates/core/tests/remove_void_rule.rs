@@ -158,3 +158,18 @@ const a = void 0;
     assert!(output.contains("void 0"), "{output}");
     assert!(!output.contains("const a = undefined"), "{output}");
 }
+
+#[test]
+fn skips_module_with_non_variable_undefined_bindings() {
+    // A named function expression, a class name, or an import local also
+    // capture the printed `undefined`, not only variable-like bindings.
+    for source in [
+        "(function undefined() { log(void 0 === x); })();",
+        "class undefined { static none() { return void 0; } }",
+        "import undefined from 'm'; const a = void 0;",
+    ] {
+        let output = render_pipeline_until(source, "RemoveVoid");
+        assert!(output.contains("void 0"), "{source}\n{output}");
+        assert!(!output.contains("= undefined"), "{source}\n{output}");
+    }
+}

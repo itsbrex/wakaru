@@ -1,10 +1,9 @@
 use swc_core::common::{Mark, SyntaxContext};
-use swc_core::ecma::ast::{
-    BinExpr, BinaryOp, BindingIdent, Expr, Ident, Lit, Module, UnaryExpr, UnaryOp,
-};
-use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+use swc_core::ecma::ast::{BinExpr, BinaryOp, Expr, Ident, Lit, Module, UnaryExpr, UnaryOp};
+use swc_core::ecma::visit::{VisitMut, VisitMutWith};
 
 use super::eval_utils::module_blocks_global_reference;
+use super::rename_utils::module_declares_binding_named;
 
 /// Rewrites minifier output `1 / 0` and `-1 / 0` back to `Infinity` and
 /// `-Infinity`.
@@ -28,19 +27,8 @@ impl UnInfinity {
     }
 
     pub fn should_run(module: &Module) -> bool {
-        struct InfinityBindingDetector {
-            found: bool,
-        }
-        impl Visit for InfinityBindingDetector {
-            fn visit_binding_ident(&mut self, binding: &BindingIdent) {
-                if binding.id.sym == "Infinity" {
-                    self.found = true;
-                }
-            }
-        }
-        let mut detector = InfinityBindingDetector { found: false };
-        module.visit_with(&mut detector);
-        !detector.found && !module_blocks_global_reference(module, "Infinity")
+        !module_declares_binding_named(module, "Infinity")
+            && !module_blocks_global_reference(module, "Infinity")
     }
 
     fn infinity(&self, span: swc_core::common::Span) -> Expr {

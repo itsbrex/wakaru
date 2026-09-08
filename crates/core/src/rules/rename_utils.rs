@@ -5,11 +5,11 @@ use std::collections::{HashMap, HashSet};
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, SyntaxContext};
 use swc_core::ecma::ast::{
-    ArrowExpr, AssignPat, BlockStmt, CatchClause, Class, ClassDecl, ClassExpr, Decl, DefaultDecl,
-    ExportNamedSpecifier, Expr, FnDecl, FnExpr, Function, Ident, ImportDecl, ImportNamedSpecifier,
-    ImportSpecifier, JSXElementName, KeyValuePatProp, KeyValueProp, MemberProp, Module, ModuleDecl,
-    ModuleExportName, ModuleItem, ObjectPatProp, Pat, Prop, PropName, Stmt, VarDecl, VarDeclKind,
-    VarDeclarator,
+    ArrowExpr, AssignPat, BindingIdent, BlockStmt, CatchClause, Class, ClassDecl, ClassExpr, Decl,
+    DefaultDecl, ExportNamedSpecifier, Expr, FnDecl, FnExpr, Function, Ident, ImportDecl,
+    ImportNamedSpecifier, ImportSpecifier, JSXElementName, KeyValuePatProp, KeyValueProp,
+    MemberProp, Module, ModuleDecl, ModuleExportName, ModuleItem, ObjectPatProp, Pat, Prop,
+    PropName, Stmt, VarDecl, VarDeclKind, VarDeclarator,
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
@@ -398,6 +398,70 @@ impl RenameShadowIndex {
             .get(old)
             .is_some_and(|names| names.contains(new_name))
     }
+}
+
+/// Whether any scope in the module declares a binding spelled `name`: a
+/// variable, parameter, or catch pattern, a function or class name (declared
+/// or as a named expression), or an import local. Rules that synthesize a
+/// free reference to a global use it as the shadow check: `SyntaxContext`
+/// does not survive printing, so a same-named binding anywhere is enough to
+/// capture the emitted identifier.
+pub(crate) fn module_declares_binding_named(module: &Module, name: &str) -> bool {
+    struct Finder<'a> {
+        name: &'a str,
+        found: bool,
+    }
+
+    impl Finder<'_> {
+        fn declare(&mut self, ident: &Ident) {
+            if ident.sym == self.name {
+                self.found = true;
+            }
+        }
+    }
+
+    impl Visit for Finder<'_> {
+        fn visit_binding_ident(&mut self, binding: &BindingIdent) {
+            self.declare(&binding.id);
+        }
+
+        fn visit_fn_decl(&mut self, declaration: &FnDecl) {
+            self.declare(&declaration.ident);
+            declaration.function.visit_with(self);
+        }
+
+        fn visit_fn_expr(&mut self, expr: &FnExpr) {
+            if let Some(ident) = &expr.ident {
+                self.declare(ident);
+            }
+            expr.function.visit_with(self);
+        }
+
+        fn visit_class_decl(&mut self, declaration: &ClassDecl) {
+            self.declare(&declaration.ident);
+            declaration.class.visit_with(self);
+        }
+
+        fn visit_class_expr(&mut self, expr: &ClassExpr) {
+            if let Some(ident) = &expr.ident {
+                self.declare(ident);
+            }
+            expr.class.visit_with(self);
+        }
+
+        fn visit_import_specifier(&mut self, specifier: &ImportSpecifier) {
+            let local = match specifier {
+                ImportSpecifier::Named(named) => &named.local,
+                ImportSpecifier::Default(default) => &default.local,
+                ImportSpecifier::Namespace(namespace) => &namespace.local,
+            };
+            self.declare(local);
+        }
+    }
+
+    let mut finder = Finder { name, found: false };
+    module.visit_with(&mut finder);
+    finder.found
 }
 
 pub fn collect_module_names(module: &Module) -> HashSet<Atom> {
@@ -996,6 +1060,45 @@ impl VisitMut for BindingRenamer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_declares_binding_named_sees_every_binding_form() {
+        for source in [
+            "var Infinity = 1;",
+            "function f(Infinity) {}",
+            "try {} catch (Infinity) {}",
+            "const [Infinity] = xs;",
+            "function Infinity() {}",
+            "(function Infinity() {})();",
+            "class Infinity {}",
+            "const C = class Infinity {};",
+            "import Infinity from 'm';",
+            "import { x as Infinity } from 'm';",
+            "import * as Infinity from 'm';",
+            "export default function Infinity() {}",
+            "function outer() { function inner() { let Infinity; } }",
+        ] {
+            with_parsed_module(source, |module| {
+                assert!(
+                    module_declares_binding_named(module, "Infinity"),
+                    "{source}"
+                );
+            });
+        }
+        for source in [
+            "const x = Infinity;",
+            "obj.Infinity = 1;",
+            "const o = { Infinity: 1 };",
+            "Infinity: for (;;) break Infinity;",
+        ] {
+            with_parsed_module(source, |module| {
+                assert!(
+                    !module_declares_binding_named(module, "Infinity"),
+                    "{source}"
+                );
+            });
+        }
+    }
     use swc_core::common::{sync::Lrc, FileName, Mark, SourceMap, GLOBALS};
     use swc_core::ecma::parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax};
     use swc_core::ecma::transforms::base::resolver;
