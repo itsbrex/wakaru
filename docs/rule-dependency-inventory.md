@@ -113,8 +113,15 @@ rationale, or level gating appear.
   UnParameters pattern-matches `arg === undefined` with the literal on the
   right.
 - **RemoveVoid** — conditional execution: `should_run()` bails if the module
-  declares a local `undefined` binding. UnParameters, UnOptionalChaining, and
-  UnUndefinedInit all match the `undefined` identifier, not `void 0`.
+  declares a local `undefined` binding, or contains `with` or a direct `eval`
+  that could bind the name (the module-wide skip in
+  [Rewrite assumptions](rewrite-assumptions.md#dynamic-scope-limits); a known
+  eval source string blocks only when it mentions the name).
+  UnParameters, UnOptionalChaining, and UnUndefinedInit all match the
+  `undefined` identifier, not `void 0`, so a skipped module keeps `void 0` and
+  those rules see nothing to recover.
+- **UnInfinity** — conditional execution: `should_run()` bails on the same
+  conditions as RemoveVoid, for a local `Infinity` binding.
 - **UnIndirectCall** — level-gated by shape: `minimal` removes only
   indirect-call wrappers around direct identifier callees (`(0, fn)()` →
   `fn()`), excluding `eval` and calls inside `with`. Member callees and

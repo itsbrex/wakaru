@@ -2,8 +2,15 @@ use swc_core::common::{Mark, SyntaxContext};
 use swc_core::ecma::ast::{BindingIdent, Expr, Ident, Lit, Module, Number, UnaryExpr, UnaryOp};
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
+use super::eval_utils::module_blocks_global_reference;
 use crate::utils::paren::strip_parens;
 
+/// Rewrites `void <number>` back to `undefined`.
+///
+/// The synthesized identifier is a free reference to the global, so the rule
+/// skips a module that declares an `undefined` binding anywhere, and, per the
+/// dynamic-scope policy in `docs/rewrite-assumptions.md`, a module containing
+/// `with` or a direct `eval` that could bind the name at runtime.
 pub struct RemoveVoid {
     unresolved_ctxt: SyntaxContext,
 }
@@ -16,10 +23,15 @@ impl RemoveVoid {
     }
 
     pub fn should_run(module: &Module) -> bool {
-        let mut detector = UndefinedBindingDetector { found: false };
-        module.visit_with(&mut detector);
-        !detector.found
+        !declares_undefined_binding(module) && !module_blocks_global_reference(module, "undefined")
     }
+}
+
+/// Whether any binding in the module is spelled `undefined`.
+fn declares_undefined_binding(module: &Module) -> bool {
+    let mut detector = UndefinedBindingDetector { found: false };
+    module.visit_with(&mut detector);
+    detector.found
 }
 
 impl VisitMut for RemoveVoid {
@@ -93,7 +105,7 @@ pub(crate) fn finalize_synthesized_undefined(module: &mut Module, unresolved_mar
         }
     }
 
-    let shadowed = !RemoveVoid::should_run(module);
+    let shadowed = declares_undefined_binding(module);
     module.visit_mut_with(&mut Finalizer {
         shadowed,
         unresolved_ctxt: SyntaxContext::empty().apply_mark(unresolved_mark),

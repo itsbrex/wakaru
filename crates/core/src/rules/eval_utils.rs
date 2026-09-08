@@ -218,3 +218,23 @@ pub(crate) fn module_has_with_stmt(module: &Module) -> bool {
     module.visit_with(&mut finder);
     finder.0
 }
+
+/// The module-wide skip from the dynamic-scope policy for a rule that
+/// synthesizes a reference to the global `name` (`undefined`, `Infinity`).
+/// The printed name has no static proof of resolving to the global once a
+/// `with` statement or a direct `eval` can add bindings at runtime, so the
+/// rule leaves the module untouched. A direct `eval` whose source is a known
+/// string blocks only when that source mentions `name`, matching the
+/// name-mention best effort binding-oriented rules use.
+pub(crate) fn module_blocks_global_reference(module: &Module, name: &str) -> bool {
+    if module_has_with_stmt(module) {
+        return true;
+    }
+    let mut analyzer = DirectEvalAnalyzer::default();
+    module.visit_with(&mut analyzer);
+    analyzer.unknown_direct_eval
+        || analyzer
+            .known_direct_eval_sources
+            .iter()
+            .any(|source| js_source_mentions_binding(source, &Atom::from(name)))
+}

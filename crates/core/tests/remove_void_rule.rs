@@ -1,6 +1,6 @@
 mod common;
 
-use common::{assert_eq_normalized, render_rule};
+use common::{assert_eq_normalized, render_pipeline_until, render_rule};
 use wakaru_core::rules::RemoveVoid;
 
 fn apply(input: &str) -> String {
@@ -94,4 +94,67 @@ if (undefined !== a) {
 
     let output = apply(input);
     assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn skips_module_with_direct_eval() {
+    // Sloppy direct `eval` can declare `undefined` at runtime; the synthesized
+    // global reference has no static proof it stays free, so the whole module
+    // keeps `void 0` (dynamic-scope policy in docs/rewrite-assumptions.md).
+    let input = r#"
+function f(code) {
+  eval(code);
+  return void 0;
+}
+"#;
+    let output = render_pipeline_until(input, "RemoveVoid");
+    assert!(output.contains("void 0"), "{output}");
+    assert!(!output.contains("undefined"), "{output}");
+}
+
+#[test]
+fn skips_module_with_with_statement() {
+    let input = r#"
+function f(scope) {
+  with (scope) {
+    log(void 0);
+  }
+  return void 0;
+}
+"#;
+    let output = render_pipeline_until(input, "RemoveVoid");
+    assert_eq!(output.matches("void 0").count(), 2, "{output}");
+    assert!(!output.contains("undefined"), "{output}");
+}
+
+#[test]
+fn indirect_eval_does_not_block() {
+    // `(0, eval)(code)` runs in the global scope and cannot add a binding to
+    // this module's lexical scope.
+    let input = r#"
+function f(code) {
+  (0, eval)(code);
+  return void 0;
+}
+"#;
+    let output = render_pipeline_until(input, "RemoveVoid");
+    assert!(output.contains("return undefined"), "{output}");
+}
+
+#[test]
+fn known_eval_source_blocks_only_when_it_mentions_undefined() {
+    let unrelated = r#"
+const crypto = eval("require('crypto')");
+const a = void 0;
+"#;
+    let output = render_pipeline_until(unrelated, "RemoveVoid");
+    assert!(output.contains("const a = undefined"), "{output}");
+
+    let mentions = r#"
+eval("var undefined = 1");
+const a = void 0;
+"#;
+    let output = render_pipeline_until(mentions, "RemoveVoid");
+    assert!(output.contains("void 0"), "{output}");
+    assert!(!output.contains("const a = undefined"), "{output}");
 }
