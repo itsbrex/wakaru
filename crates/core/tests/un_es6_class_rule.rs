@@ -2789,3 +2789,166 @@ exports.Vector = e;
     assert!(output.contains("return new Vector(n, r);"), "{output}");
     assert!(!output.contains("new e("), "{output}");
 }
+
+// ── Inlined `_createClass` loops are classes, not the helper ────────────────
+
+const CREATE_CLASS_HELPER: &str = r#"
+var _createClass = function() {
+    function e(e, t) {
+        for (var n = 0; n < t.length; n++) {
+            var r = t[n];
+            r.enumerable = r.enumerable || false;
+            r.configurable = true;
+            "value" in r && (r.writable = true);
+            Object.defineProperty(e, r.key, r);
+        }
+    }
+    return function(t, n, r) {
+        return n && e(t.prototype, n), r && e(t, r), t;
+    };
+}();
+"#;
+
+/// A class IIFE whose minifier inlined the `_createClass` loop: it has a
+/// function declaration, a `return`, and `Object.defineProperty(_, _.key, _)`,
+/// exactly the signals the helper detector looks for.
+const INLINED_LOOP_CLASS: &str = r#"
+var Timer = function() {
+    var t;
+    function n() {
+        if (!(this instanceof n)) {
+            throw TypeError("Cannot call a class as a function");
+        }
+        this.timeStore = {};
+    }
+    t = [
+        {
+            key: "start",
+            value: function(t) {
+                this.timeStore[t] = Date.now();
+            }
+        }
+    ];
+    (function(t, n) {
+        for (var r = 0; r < n.length; r++) {
+            var a = n[r];
+            a.enumerable = a.enumerable || false;
+            a.configurable = true;
+            if ("value" in a) {
+                a.writable = true;
+            }
+            Object.defineProperty(t, a.key, a);
+        }
+    })(n.prototype, t);
+    return n;
+}();
+"#;
+
+#[test]
+fn class_iife_with_an_inlined_create_class_loop_is_not_removed_as_the_helper() {
+    // `Widget` converts and triggers the orphaned-helper sweep. `Timer` is not
+    // referenced anywhere; it is dead input code, never a helper, so it stays.
+    let input = format!(
+        "{CREATE_CLASS_HELPER}\n{INLINED_LOOP_CLASS}\n{}",
+        r#"
+var Widget = function() {
+    function t() {}
+    _createClass(t, [{ key: "text", value: function() { return null; } }]);
+    return t;
+}();
+use(Widget);
+"#
+    );
+    let output = apply(&input);
+    assert!(output.contains("class Widget"), "{output}");
+    assert!(output.contains("Timer"), "{output}");
+    assert!(output.contains("timeStore"), "{output}");
+    assert!(!output.contains("_createClass"), "{output}");
+}
+
+#[test]
+fn class_referenced_only_from_another_inlined_loop_class_survives() {
+    // Bench shape: two classes with inlined loops, `Processor` builds a `Timer`
+    // inside a method, the module only uses `Processor`. Both are classes and
+    // both must survive the sweep that removes the real `_createClass`.
+    let input = format!(
+        "{CREATE_CLASS_HELPER}\n{INLINED_LOOP_CLASS}\n{}",
+        r#"
+var Processor = function() {
+    var t;
+    function n() {
+        if (!(this instanceof n)) {
+            throw TypeError("Cannot call a class as a function");
+        }
+    }
+    t = [
+        {
+            key: "createTimer",
+            value: function() {
+                return new Timer();
+            }
+        }
+    ];
+    (function(t, n) {
+        for (var r = 0; r < n.length; r++) {
+            var a = n[r];
+            a.enumerable = a.enumerable || false;
+            a.configurable = true;
+            if ("value" in a) {
+                a.writable = true;
+            }
+            Object.defineProperty(t, a.key, a);
+        }
+    })(n.prototype, t);
+    return n;
+}();
+var Widget = function() {
+    function t() {}
+    _createClass(t, [{ key: "text", value: function() { return null; } }]);
+    return t;
+}();
+use(Widget, new Processor());
+"#
+    );
+    let output = apply(&input);
+    assert!(output.contains("new Timer()"), "{output}");
+    assert!(
+        output.contains("var Timer = ") || output.contains("class Timer"),
+        "{output}"
+    );
+    assert!(!output.contains("_createClass"), "{output}");
+}
+
+#[test]
+fn create_class_helper_referenced_only_by_a_kept_helper_stays() {
+    // `_createClass2` delegates to `_createClass`. `Widget` converts, so
+    // `_createClass2` loses that call, but a direct call on an external
+    // prototype keeps it, and the helper it delegates to must stay with it.
+    let input = format!(
+        "{CREATE_CLASS_HELPER}\n{}",
+        r#"
+var _createClass2 = function() {
+    function e(e, t) {
+        for (var n = 0; n < t.length; n++) {
+            var r = t[n];
+            Object.defineProperty(e, r.key, r);
+        }
+    }
+    return function(t, n, r) {
+        return n && e(t.prototype, n), _createClass(t, n, r), t;
+    };
+}();
+var Widget = function() {
+    function t() {}
+    _createClass2(t, [{ key: "text", value: function() { return null; } }]);
+    return t;
+}();
+_createClass2(External.prototype, [{ key: "extra", value: function() {} }]);
+use(Widget);
+"#
+    );
+    let output = apply(&input);
+    assert!(output.contains("class Widget"), "{output}");
+    assert!(output.contains("var _createClass2 = "), "{output}");
+    assert!(output.contains("var _createClass = "), "{output}");
+}

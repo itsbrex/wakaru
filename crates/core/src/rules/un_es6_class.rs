@@ -802,11 +802,7 @@ fn is_create_class_function(function: &Function) -> bool {
     let Some(body) = &function.body else {
         return false;
     };
-    if !body.stmts.iter().any(|stmt| {
-        matches!(stmt, Stmt::Return(ret) if ret.arg.as_ref().is_some_and(|arg| {
-            matches!(arg.as_ref(), Expr::Ident(id) if id.sym == constructor.id.sym && id.ctxt == constructor.id.ctxt)
-        }))
-    }) {
+    if !returns_ident(&body.stmts, &constructor.id) {
         return false;
     }
 
@@ -845,6 +841,46 @@ fn is_create_class_function(function: &Function) -> bool {
     };
     body.visit_with(&mut finder);
     finder.found
+}
+
+/// Whether a top-level `return` hands back `target`, directly or as the last
+/// element of a minified sequence (`return n && e(t.prototype, n), t`).
+fn returns_ident(stmts: &[Stmt], target: &Ident) -> bool {
+    stmts.iter().any(|stmt| {
+        let Stmt::Return(ret) = stmt else {
+            return false;
+        };
+        let Some(arg) = ret.arg.as_deref() else {
+            return false;
+        };
+        let last = match strip_parens(arg) {
+            Expr::Seq(seq) => seq.exprs.last().map(|expr| strip_parens(expr)),
+            other => Some(other),
+        };
+        matches!(last, Some(Expr::Ident(id)) if id.sym == target.sym && id.ctxt == target.ctxt)
+    })
+}
+
+/// The function a `_createClass` factory body returns: `return function(...)`
+/// or `return name` for a function declared in the same body.
+fn returned_function(stmts: &[Stmt]) -> Option<&Function> {
+    stmts.iter().find_map(|stmt| {
+        let Stmt::Return(ret) = stmt else {
+            return None;
+        };
+        match strip_parens(ret.arg.as_deref()?) {
+            Expr::Fn(fn_expr) => Some(fn_expr.function.as_ref()),
+            Expr::Ident(id) => stmts.iter().find_map(|stmt| match stmt {
+                Stmt::Decl(Decl::Fn(fn_decl))
+                    if fn_decl.ident.sym == id.sym && fn_decl.ident.ctxt == id.ctxt =>
+                {
+                    Some(fn_decl.function.as_ref())
+                }
+                _ => None,
+            }),
+            _ => None,
+        }
+    })
 }
 
 /// If a VarDecl is `var r = (function() { ... createClass body ... })()`, return the name `r`.
@@ -926,7 +962,18 @@ fn is_create_class_body(stmts: &[Stmt], unresolved_mark: Mark) -> bool {
         unresolved_mark,
     };
     stmts.visit_with(&mut detector);
-    detector.has_define_property_key
+    if !detector.has_define_property_key {
+        return false;
+    }
+
+    // The factory must hand back the helper itself: constructor in,
+    // `Constructor.prototype` defined, constructor out. A class IIFE whose
+    // minifier inlined the `_createClass` loop also has a function
+    // declaration, a return, and `Object.defineProperty(_, _.key, _)`, but it
+    // returns its constructor, which never returns its own first parameter.
+    // Treating that class as the helper deletes it once nothing outside the
+    // other "helpers" references it.
+    returned_function(stmts).is_some_and(is_create_class_function)
 }
 
 /// Get the body statements from a function or arrow expression.
@@ -1071,24 +1118,40 @@ fn remove_unreferenced_helpers<T>(
     if helpers.is_empty() {
         return;
     }
-    let mut counter = BindingHelperRefCounter::new(helpers);
-    for item in items.iter() {
-        if helper_key(item)
-            .as_ref()
-            .is_some_and(|key| helpers.contains(key))
-        {
-            continue;
+    // A helper that stays referenced keeps its declaration, so the references
+    // inside it count for the others: shrink the removable set until stable.
+    let mut removable: HashSet<BindingKey> = items
+        .iter()
+        .filter_map(&helper_key)
+        .filter(|key| helpers.contains(key))
+        .collect();
+    loop {
+        if removable.is_empty() {
+            return;
         }
-        item.visit_with(&mut counter);
-    }
-    items.retain(|item| {
-        if let Some(key) = helper_key(item) {
-            if helpers.contains(&key) {
-                return counter.counts.get(&key).copied().unwrap_or(0) > 0;
+        let mut counter = BindingHelperRefCounter::new(&removable);
+        for item in items.iter() {
+            if helper_key(item)
+                .as_ref()
+                .is_some_and(|key| removable.contains(key))
+            {
+                continue;
             }
+            item.visit_with(&mut counter);
         }
-        true
-    });
+        let referenced: Vec<BindingKey> = removable
+            .iter()
+            .filter(|key| counter.counts.get(*key).copied().unwrap_or(0) > 0)
+            .cloned()
+            .collect();
+        if referenced.is_empty() {
+            break;
+        }
+        for key in referenced {
+            removable.remove(&key);
+        }
+    }
+    items.retain(|item| helper_key(item).is_none_or(|key| !removable.contains(&key)));
 }
 
 fn remove_orphaned_fn_helpers_stmts(stmts: &mut Vec<Stmt>, helpers: &HashSet<BindingKey>) {
