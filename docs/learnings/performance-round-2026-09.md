@@ -76,6 +76,20 @@ the change past the saving.
 side-effect check ahead of the observable-read proofs passed its tests and
 measured within noise on seven alternating pairs. Reverted.
 
+**Gating Phase 1 fact recovery on IIFE presence.** Phase 1 clones every
+module and re-runs UnIife, its arrow preparation, the UnCurlyBraces..UnEsm
+range, SmartRename, and UnExportRename before collecting facts. A read-only
+"does the module contain a call whose callee is a function expression" scan
+skipped that work for most modules with byte-identical output on every
+benchmark input, and it was still withdrawn. The predicate covers what UnIife
+can expose; the skipped work also includes inlining and export renames that
+change which local an `ExportFact` names, and helper-export classification
+reads that local. A module exporting a helper through an alias
+(`var h = p; export { h as rest }`) has no IIFE, yet only the recovered clone
+classifies it as a helper module. A gate whose predicate does not cover every
+pass it skips cannot be hardened case by case; the honest options are to gate
+each pass on its own trigger or to leave the recovery alone.
+
 ## Measurement rules that mattered
 
 - Alternate AB/BA and compare within one method. Serial hyperfine batches
