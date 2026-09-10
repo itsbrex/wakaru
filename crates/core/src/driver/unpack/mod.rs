@@ -28,6 +28,7 @@ mod dead_module;
 mod filename_recovery;
 mod merge;
 mod phases;
+mod schedule;
 mod scope_split;
 mod webpack_commonjs_runtime;
 

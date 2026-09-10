@@ -2,7 +2,6 @@
 //! decompilation with the cross-module late pass (Phase 2).
 
 use anyhow::{bail, Result};
-use rayon::prelude::*;
 use swc_core::common::{sync::Lrc, Globals, Mark, SourceMap, SyntaxContext, DUMMY_SP, GLOBALS};
 use swc_core::ecma::ast::{
     AssignExpr, AssignOp, AssignTarget, Expr, ExprStmt, Ident, IdentName, MemberExpr, MemberProp,
@@ -30,6 +29,7 @@ use super::filename_recovery::{
 use super::merge::{
     apply_filename_rewrites, apply_numeric_rewrites, NumericRewritePlan, PreparedUnpackModule,
 };
+use super::schedule::par_map_largest_first;
 use super::webpack_commonjs_runtime::normalize_webpack_commonjs_runtime;
 use super::{recover_late_esm_from_factory_iifes, LateEsmRecoveryOptions};
 use crate::commonjs_default_object_composition::{
@@ -543,7 +543,11 @@ pub(super) fn unpack_multi_module_with_plan(
     let phase1: Vec<_> = {
         let span = tracing::info_span!("phase1_collect_facts");
         let _enter = span.enter();
-        modules.par_iter_mut().map(collect_facts).collect()
+        par_map_largest_first(
+            modules.iter_mut().collect(),
+            |module: &&mut PreparedUnpackModule| module.module.code.len(),
+            collect_facts,
+        )
     };
 
     let mut module_facts = ModuleFactsMap::new();
@@ -887,10 +891,15 @@ pub(super) fn unpack_multi_module_with_plan(
     let triples: Vec<_> = {
         let span = tracing::info_span!("phase2_decompile_modules");
         let _enter = span.enter();
-        phase2_inputs
-            .into_par_iter()
-            .map(decompile_module)
-            .collect()
+        par_map_largest_first(
+            phase2_inputs,
+            |(unpacked, _, _): &(
+                PreparedUnpackModule,
+                Option<Phase1PreparedModule>,
+                Vec<UnpackWarning>,
+            )| unpacked.module.code.len(),
+            decompile_module,
+        )
     };
 
     // Separate source maps from the tuples before dead-module elimination.

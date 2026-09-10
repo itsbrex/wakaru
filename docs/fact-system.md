@@ -63,6 +63,14 @@ Phase 2 (per module, parallel):
     targeted late cleanup/recovery
 ```
 
+Both phases hand modules to the Rayon pool largest-first by source length
+(`driver/unpack/schedule.rs`). Per-module cost is heavily skewed, and Rayon's
+default range splitting can leave the largest module to start after most
+workers have gone idle, so it becomes the critical path of the phase.
+Dispatching in descending size order is the longest-processing-time-first
+heuristic; results are placed back in input order, so output never depends on
+scheduling.
+
 The normal no-source-map path runs the through-`UnEsm` range once. The retained
 AST crosses the barrier together with the exact `Globals` and unresolved mark
 that produced its `SyntaxContext`s, so downstream ctxt-sensitive rules keep a
