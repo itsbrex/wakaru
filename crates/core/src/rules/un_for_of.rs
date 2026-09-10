@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Span, Spanned, SyntaxContext, DUMMY_SP};
@@ -238,7 +238,7 @@ fn collect_closure_jscomp_namespaces(module: &Module) -> HashSet<BindingKey> {
     }
 
     let mut collector = Collector {
-        namespaces: HashSet::new(),
+        namespaces: HashSet::default(),
     };
     module.visit_with(&mut collector);
     collector.namespaces
@@ -256,7 +256,7 @@ fn collect_cross_module_values_refs(
     current_filename: Option<&str>,
 ) -> CrossModuleValuesRefs {
     let mut refs = CrossModuleValuesRefs::default();
-    let mut namespace_factories: HashMap<BindingKey, HashSet<String>> = HashMap::new();
+    let mut namespace_factories: HashMap<BindingKey, HashSet<String>> = HashMap::default();
 
     for item in &module.body {
         let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {

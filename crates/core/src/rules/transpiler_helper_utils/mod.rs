@@ -1,7 +1,7 @@
+use crate::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::OnceCell;
-use std::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::Mark;
@@ -331,7 +331,7 @@ impl LocalHelperContext {
             .filter(|(key, _)| !remaining_roots.contains(key))
             .collect();
         if removable_roots.is_empty() {
-            return HashMap::new();
+            return HashMap::default();
         }
 
         let helper_dependencies = self.helper_dependencies(module, &removable_roots);

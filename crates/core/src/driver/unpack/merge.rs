@@ -5,7 +5,7 @@
 //! renames sibling outputs, and numeric `require(<id>)` / async-chunk
 //! references are rewritten when the target id is unambiguous across inputs.
 
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -315,7 +315,7 @@ pub(super) fn prepare_multi_source_modules(
         .collect::<Vec<_>>();
     apply_public_path_reservations(&mut modules, &public_paths.facade);
     assign_unique_module_filenames(&mut modules, public_paths);
-    let mut filename_maps = HashMap::<PreparedInputId, HashMap<String, String>>::new();
+    let mut filename_maps = HashMap::<PreparedInputId, HashMap<String, String>>::default();
     for (module, original_filename) in modules.iter().zip(&original_filenames) {
         if let Some(input) = module.input {
             filename_maps
@@ -510,7 +510,7 @@ fn chunk_filename_matches_id(filename: &str, chunk_id: usize) -> bool {
 }
 
 fn unique_numeric_module_id_map(modules: &[MultiSourceModule]) -> HashMap<usize, String> {
-    let mut counts: HashMap<usize, (usize, String)> = HashMap::new();
+    let mut counts: HashMap<usize, (usize, String)> = HashMap::default();
     for module in modules {
         if !module.allow_cross_chunk_rewrite {
             continue;
@@ -534,7 +534,7 @@ fn unique_numeric_module_id_map(modules: &[MultiSourceModule]) -> HashMap<usize,
 fn unique_numeric_chunk_module_id_map(
     modules: &[MultiSourceModule],
 ) -> HashMap<(String, usize, usize), String> {
-    let mut counts: HashMap<(String, usize, usize), (usize, String)> = HashMap::new();
+    let mut counts: HashMap<(String, usize, usize), (usize, String)> = HashMap::default();
     for module in modules {
         if !module.allow_cross_chunk_rewrite || module.chunk_ids.is_empty() {
             continue;
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn detected_modules_share_chunk_id_storage() {
-        let chunk_ids = Arc::new(HashSet::from([7, 11, 13]));
+        let chunk_ids = Arc::new(HashSet::from_iter([7, 11, 13]));
         let first = MultiSourceModule::detected(
             UnpackedModule::default(),
             chunk_ids.clone(),
@@ -927,7 +927,7 @@ mod tests {
         let module = MultiSourceModule::detected_with_ast_from_input(
             UnpackedModule::default(),
             None,
-            HashSet::new(),
+            HashSet::default(),
             "input.js".to_string(),
             Some(PreparedInputId::from_index(0)),
             "precomputed-group".to_string(),
@@ -973,7 +973,7 @@ mod tests {
                     filename: "module-20.js".to_string(),
                     ..Default::default()
                 },
-                HashSet::new(),
+                HashSet::default(),
                 "entry.js".to_string(),
                 true,
             ),
@@ -985,7 +985,7 @@ mod tests {
                     filename: "module-999.js".to_string(),
                     ..Default::default()
                 },
-                HashSet::new(),
+                HashSet::default(),
                 "chunk.js".to_string(),
                 true,
             ),

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{SyntaxContext, DUMMY_SP};
@@ -324,7 +324,7 @@ where
     // binding that holds the value of the last duplicate. Per-index renames
     // rebind body uses to the first occurrence, and literal extraction emits
     // colliding lexical declarations.
-    let mut seen_params = HashSet::new();
+    let mut seen_params = HashSet::default();
     for i in 0..param_count {
         if let Some(binding) = param_at(i) {
             if !seen_params.insert(binding) {
@@ -445,8 +445,8 @@ where
     P: VisitWith<ParamValueRefs>,
 {
     let mut collector = ParamValueRefs {
-        refs: HashSet::new(),
-        names: HashSet::new(),
+        refs: HashSet::default(),
+        names: HashSet::default(),
     };
     params.visit_with(&mut collector);
     collector
@@ -581,7 +581,7 @@ fn collect_all_binding_names(body: &FunctionBody) -> HashSet<Atom> {
     }
 
     let mut c = Collector {
-        names: HashSet::new(),
+        names: HashSet::default(),
     };
     body.visit_with(&mut c);
     c.names

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::common::{Mark, SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
@@ -254,7 +254,7 @@ fn is_simple_value(expr: &Expr) -> bool {
 use crate::analysis::BindingId as BindingKey;
 
 fn targets_can_be_split(assign: &AssignExpr) -> bool {
-    let mut assigned_bindings = HashSet::new();
+    let mut assigned_bindings = HashSet::default();
     let mut current = assign;
 
     loop {
@@ -296,11 +296,11 @@ fn target_ident_binding(target: &AssignTarget) -> Option<BindingKey> {
 
 fn target_reference_bindings(target: &AssignTarget) -> HashSet<BindingKey> {
     if matches!(target, AssignTarget::Simple(SimpleAssignTarget::Ident(_))) {
-        return HashSet::new();
+        return HashSet::default();
     }
 
     let mut collector = IdentReferenceCollector {
-        references: HashSet::new(),
+        references: HashSet::default(),
     };
     target.visit_with(&mut collector);
     collector.references

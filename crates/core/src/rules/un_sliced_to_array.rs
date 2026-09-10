@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use crate::analysis::binding_uses::{BindingUseIndex, UseKind};
 use swc_core::atoms::Atom;

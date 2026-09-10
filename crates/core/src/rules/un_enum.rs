@@ -1,4 +1,5 @@
-use std::collections::{HashSet, VecDeque};
+use crate::collections::HashSet;
+use std::collections::VecDeque;
 
 use swc_core::atoms::{Atom, Wtf8Atom};
 use swc_core::common::{Mark, Span, Spanned, DUMMY_SP};
@@ -1322,7 +1323,7 @@ fn module_items_direct_eval_can_observe<'a>(
 }
 
 fn collect_exported_names(items: &[ModuleItem]) -> HashSet<Atom> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for item in items {
         match item {
             ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => {

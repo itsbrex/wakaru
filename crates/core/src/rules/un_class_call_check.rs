@@ -61,7 +61,7 @@ fn run_un_class_call_check(module: &mut Module, local_helpers: &LocalHelperConte
 // ---------------------------------------------------------------------------
 
 struct CallRemover<'a> {
-    helpers: &'a std::collections::HashMap<BindingKey, TranspilerHelperKind>,
+    helpers: &'a crate::collections::HashMap<BindingKey, TranspilerHelperKind>,
     /// Bindings naming the innermost enclosing function, one frame per
     /// `Function` boundary. Babel emits `_classCallCheck(this, Foo)` only at
     /// the top of the lowered constructor `Foo`, so the second argument must

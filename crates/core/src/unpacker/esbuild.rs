@@ -1,5 +1,5 @@
+use crate::collections::{HashMap, HashSet};
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{
@@ -173,7 +173,7 @@ fn detect_from_prepared_factories(
     // bindings from the resolved AST.  Emission is deferred to Phase 6 so that
     // scope-hoisted extraction can inform import/export synthesis.
     let mut modules: Vec<UnpackedModule> = Vec::new();
-    let mut global_seen: HashSet<String> = HashSet::new();
+    let mut global_seen: HashSet<String> = HashSet::default();
     global_seen.insert("entry.js".to_string());
 
     // Build top_level_bindings from the FULL analysis module so we can track
@@ -238,14 +238,14 @@ fn detect_from_prepared_factories(
             let ModuleItem::Stmt(stmt) = item else {
                 return None;
             };
-            let mut write_targets = HashSet::new();
+            let mut write_targets = HashSet::default();
             collect_write_bindings(stmt, &all_top_level_bindings, &mut write_targets);
             if write_targets.is_empty() {
                 return None;
             }
             let mut collector = TopLevelRefCollector {
                 top_level_bindings: &all_top_level_bindings,
-                references: HashSet::new(),
+                references: HashSet::default(),
             };
             item.visit_with(&mut collector);
             Some(TopLevelWriterItem {
@@ -305,7 +305,7 @@ fn detect_from_prepared_factories(
         .iter()
         .flat_map(|f| f.referenced_bindings.iter().cloned())
         .collect();
-    let mut factory_preassigned_bindings: HashMap<BindingId, String> = HashMap::new();
+    let mut factory_preassigned_bindings: HashMap<BindingId, String> = HashMap::default();
     for factory in &pending_factories {
         if factory.cjs_params.is_some() {
             continue;
@@ -339,7 +339,7 @@ fn detect_from_prepared_factories(
     // Phase 4: everything that is not a helper decl or factory decl becomes the entry.
     // Mixed declarations can contain useful sibling helpers, for example
     // `var wrap = ..., __esm = ...`; filter at declarator granularity.
-    let mut drop_unowned_helper_sibling_indices = HashSet::new();
+    let mut drop_unowned_helper_sibling_indices = HashSet::default();
     let mut entry_items = Vec::new();
     let mut analysis_entry_items = Vec::new();
     for (source_item, analysis_item) in module.body.iter().zip(&analysis_module.body) {
@@ -408,9 +408,9 @@ fn detect_from_prepared_factories(
         write_bindings: HashSet<BindingId>,
     }
 
-    let mut merged_factories: HashMap<String, Vec<MergedFactory>> = HashMap::new();
+    let mut merged_factories: HashMap<String, Vec<MergedFactory>> = HashMap::default();
     let mut standalone_factories: Vec<PendingFactory> = Vec::new();
-    let mut factory_owned_bindings: HashMap<String, HashSet<BindingId>> = HashMap::new();
+    let mut factory_owned_bindings: HashMap<String, HashSet<BindingId>> = HashMap::default();
 
     for factory in pending_factories {
         if factory.write_bindings.is_empty() {
@@ -572,8 +572,8 @@ fn detect_from_prepared_factories(
         .map(|(index, factory)| (factory.filename.clone(), index))
         .collect();
     let mut writer_adjacency: Vec<HashSet<usize>> =
-        vec![HashSet::new(); standalone_factories.len()];
-    let mut writer_factory_indices = HashSet::new();
+        vec![HashSet::default(); standalone_factories.len()];
+    let mut writer_factory_indices = HashSet::default();
     for (writer_index, factory) in standalone_factories.iter().enumerate() {
         if factory.cjs_params.is_some() {
             continue;
@@ -607,8 +607,8 @@ fn detect_from_prepared_factories(
         }
     }
 
-    let mut factory_filename_redirects: HashMap<String, String> = HashMap::new();
-    let mut affected_factory_filenames = HashSet::new();
+    let mut factory_filename_redirects: HashMap<String, String> = HashMap::default();
+    let mut affected_factory_filenames = HashSet::default();
     let mut visited = vec![false; standalone_factories.len()];
     for start in 0..standalone_factories.len() {
         if visited[start] {
@@ -692,8 +692,8 @@ fn detect_from_prepared_factories(
         .map(|factory| factory.filename.clone())
         .collect();
     let mut relocated_factory_writer_items: HashMap<String, Vec<TopLevelWriterItem>> =
-        HashMap::new();
-    let mut relocation_demoted_groups: HashSet<String> = HashSet::new();
+        HashMap::default();
+    let mut relocation_demoted_groups: HashSet<String> = HashSet::default();
     for writer in top_level_writer_items {
         if !remaining_entry_spans.contains(&(writer.span.lo.0, writer.span.hi.0)) {
             continue;
@@ -768,7 +768,8 @@ fn detect_from_prepared_factories(
         // this pass cannot synthesize an import from entry.js. Build this map
         // only on the uncommon demotion path to avoid retaining another binding
         // graph for ordinary large bundles.
-        let mut standalone_group_references: HashMap<String, HashSet<BindingId>> = HashMap::new();
+        let mut standalone_group_references: HashMap<String, HashSet<BindingId>> =
+            HashMap::default();
         for factory in &standalone_factories {
             standalone_group_references
                 .entry(factory.filename.clone())
@@ -903,7 +904,7 @@ fn detect_from_prepared_factories(
     // slot. Record every relocated binding so entry emission drops the
     // duplicate and re-imports the owner's single mutable copy instead of
     // silently forking the state.
-    let mut entry_duplicate_declarations: HashSet<BindingId> = HashSet::new();
+    let mut entry_duplicate_declarations: HashSet<BindingId> = HashSet::default();
     let source_module_items = &module.body;
     if !merged_factories.is_empty() {
         for module in &mut modules {
@@ -925,8 +926,8 @@ fn detect_from_prepared_factories(
                     external_import_by_atom: &external_import_by_atom,
                     top_level_decl_indices: &top_level_decl_indices,
                 };
-                let mut extra_imports: HashMap<String, Vec<Atom>> = HashMap::new();
-                let mut extra_external_imports: HashSet<BindingId> = HashSet::new();
+                let mut extra_imports: HashMap<String, Vec<Atom>> = HashMap::default();
+                let mut extra_external_imports: HashSet<BindingId> = HashSet::default();
                 let mut extra_owned_bindings: HashSet<BindingId> = factory_owned_bindings
                     .get(&module.filename)
                     .cloned()
@@ -1085,7 +1086,7 @@ fn detect_from_prepared_factories(
             // Group first because multiple adopted bindings can share one
             // mixed declaration; filtering each independently and deduping by
             // item index would arbitrarily discard all but one binding.
-            let mut extra_owned_atoms_by_index: HashMap<usize, HashSet<Atom>> = HashMap::new();
+            let mut extra_owned_atoms_by_index: HashMap<usize, HashSet<Atom>> = HashMap::default();
             for binding in extra_owned_bindings.into_iter().filter(|binding| {
                 module_factory_owned.contains(binding)
                     || module_local_atoms
@@ -1131,7 +1132,7 @@ fn detect_from_prepared_factories(
     }
 
     let mut standalone_factory_group_order = Vec::new();
-    let mut standalone_factory_groups: HashMap<String, Vec<PendingFactory>> = HashMap::new();
+    let mut standalone_factory_groups: HashMap<String, Vec<PendingFactory>> = HashMap::default();
     for factory in standalone_factories {
         if !standalone_factory_groups.contains_key(&factory.filename) {
             standalone_factory_group_order.push(factory.filename.clone());
@@ -1207,12 +1208,12 @@ fn detect_from_prepared_factories(
         }
 
         let mut import_items: Vec<ModuleItem> = Vec::new();
-        let mut external_import_bindings: HashSet<BindingId> = HashSet::new();
+        let mut external_import_bindings: HashSet<BindingId> = HashSet::default();
         let mut import_renames: Vec<BindingRename> = Vec::new();
 
         if !binding_to_filename.is_empty() {
             // Group factory's referenced bindings by source module filename.
-            let mut imports_by_source: HashMap<String, Vec<BindingId>> = HashMap::new();
+            let mut imports_by_source: HashMap<String, Vec<BindingId>> = HashMap::default();
             let owned = factory_owned_bindings
                 .get(&group_filename)
                 .cloned()
@@ -1691,8 +1692,8 @@ fn repair_module_imports(
 
     let mut collector = AtomRefCollector {
         candidate_atoms: &candidate_atoms,
-        references: HashSet::new(),
-        shadowed_atoms: vec![HashSet::new()],
+        references: HashSet::default(),
+        shadowed_atoms: vec![HashSet::default()],
     };
     for item in &entry_items {
         item.visit_with(&mut collector);
@@ -1708,7 +1709,7 @@ fn repair_module_imports(
         .map(|(atom, _)| atom)
         .collect();
     let binding_filename_by_atom = atom_to_filename_binding_map(binding_to_filename);
-    let mut imports_by_source: HashMap<String, Vec<Atom>> = HashMap::new();
+    let mut imports_by_source: HashMap<String, Vec<Atom>> = HashMap::default();
     for atom in collector.references {
         if already_imported.contains(&atom) {
             continue;
@@ -1771,7 +1772,7 @@ fn augment_imports_with_referenced_atoms_for_existing_sources(
 fn atom_to_filename_binding_map(
     bindings: &HashMap<BindingId, String>,
 ) -> HashMap<Atom, (BindingId, String)> {
-    let mut by_atom = HashMap::new();
+    let mut by_atom = HashMap::default();
     for (binding, filename) in bindings {
         by_atom
             .entry(binding.0.clone())
@@ -1781,7 +1782,7 @@ fn atom_to_filename_binding_map(
 }
 
 fn atom_binding_map_from_keys<T>(imports: &HashMap<BindingId, T>) -> HashMap<Atom, BindingId> {
-    let mut by_atom = HashMap::new();
+    let mut by_atom = HashMap::default();
     for binding in imports.keys() {
         by_atom
             .entry(binding.0.clone())
@@ -1791,7 +1792,7 @@ fn atom_binding_map_from_keys<T>(imports: &HashMap<BindingId, T>) -> HashMap<Ato
 }
 
 fn collect_top_level_decl_indices(items: &[ModuleItem]) -> HashMap<BindingId, usize> {
-    let mut indices = HashMap::new();
+    let mut indices = HashMap::default();
     for (index, item) in items.iter().enumerate() {
         for binding in module_item_declared_binding_ids(item) {
             indices.entry(binding).or_insert(index);
@@ -1816,11 +1817,11 @@ fn collect_top_level_decl_references(
                     if ignored_atoms.contains(&binding.0) {
                         return None;
                     }
-                    let owned_atoms = HashSet::from([binding.0.clone()]);
+                    let owned_atoms = HashSet::from_iter([binding.0.clone()]);
                     let item = filter_item_to_owned_bindings(&items[*index], &owned_atoms)?;
                     let mut collector = TopLevelRefCollector {
                         top_level_bindings,
-                        references: HashSet::new(),
+                        references: HashSet::default(),
                     };
                     item.visit_with(&mut collector);
                     Some((binding.clone(), collector.references))
@@ -1840,7 +1841,7 @@ fn collect_top_level_decl_writes(
             .par_iter()
             .filter_map(|(binding, index)| {
                 GLOBALS.set(globals, || {
-                    let owned_atoms = HashSet::from([binding.0.clone()]);
+                    let owned_atoms = HashSet::from_iter([binding.0.clone()]);
                     let item = filter_item_to_owned_bindings(&items[*index], &owned_atoms)?;
                     let binding_writes = exact_write_bindings_for_item(&item, top_level_bindings);
                     Some((binding.clone(), binding_writes))
@@ -1854,7 +1855,7 @@ fn exact_write_bindings_for_item(
     item: &ModuleItem,
     top_level_bindings: &HashSet<BindingId>,
 ) -> HashSet<BindingId> {
-    let mut writes = HashSet::new();
+    let mut writes = HashSet::default();
     if let ModuleItem::Stmt(stmt) = item {
         collect_write_bindings(stmt, top_level_bindings, &mut writes);
     }
@@ -1879,7 +1880,7 @@ fn add_factory_atom_import(
 fn atom_to_module_binding_map(
     bindings: &HashMap<BindingId, usize>,
 ) -> HashMap<Atom, (BindingId, usize)> {
-    let mut by_atom = HashMap::new();
+    let mut by_atom = HashMap::default();
     for (binding, module_index) in bindings {
         by_atom
             .entry(binding.0.clone())
@@ -1936,7 +1937,7 @@ struct CjsFactoryParams {
 // ---------------------------------------------------------------------------
 
 fn collect_helper_syms(module: &Module) -> HashSet<Atom> {
-    let mut syms = HashSet::new();
+    let mut syms = HashSet::default();
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
             continue;
@@ -2008,7 +2009,7 @@ fn factory_shape_helper_sym(decl: &VarDeclarator, helper_syms: &HashSet<Atom>) -
 }
 
 fn collect_commonjs_helper_syms(module: &Module) -> HashSet<Atom> {
-    let mut syms = HashSet::new();
+    let mut syms = HashSet::default();
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
             continue;
@@ -2438,9 +2439,9 @@ fn collect_factory_body_bindings(
 ) -> (HashSet<BindingId>, HashSet<BindingId>) {
     let mut references = TopLevelRefCollector {
         top_level_bindings,
-        references: HashSet::new(),
+        references: HashSet::default(),
     };
-    let mut writes = HashSet::new();
+    let mut writes = HashSet::default();
 
     match body {
         FactoryBodyRef::Stmts(stmts) => {
@@ -2662,9 +2663,9 @@ fn merge_conflicting_factory_scope_metas(
     // A lazy init factory can seed mutable bindings that are later assigned by
     // different scope modules. Those modules must stay in one synthetic ESM
     // file with the factory, otherwise one writer would assign to an import.
-    let mut writer_modules_by_factory: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut writer_modules_by_factory: HashMap<String, Vec<usize>> = HashMap::default();
     for (mi, meta) in metas.iter().enumerate() {
-        let mut factories = HashSet::new();
+        let mut factories = HashSet::default();
         for atom in &meta.written_atoms {
             let Some((_, factory_filename)) = factory_preassigned_by_atom.get(atom) else {
                 continue;
@@ -2681,7 +2682,7 @@ fn merge_conflicting_factory_scope_metas(
         }
     }
 
-    let mut adjacency: Vec<HashSet<usize>> = vec![HashSet::new(); metas.len()];
+    let mut adjacency: Vec<HashSet<usize>> = vec![HashSet::default(); metas.len()];
     for writers in writer_modules_by_factory.values_mut() {
         writers.sort_unstable();
         writers.dedup();
@@ -2699,8 +2700,8 @@ fn merge_conflicting_factory_scope_metas(
         return;
     }
 
-    let mut group_by_first: HashMap<usize, Vec<usize>> = HashMap::new();
-    let mut member_to_first: HashMap<usize, usize> = HashMap::new();
+    let mut group_by_first: HashMap<usize, Vec<usize>> = HashMap::default();
+    let mut member_to_first: HashMap<usize, usize> = HashMap::default();
     let mut visited = vec![false; metas.len()];
     for start in 0..metas.len() {
         if visited[start] {
@@ -2983,7 +2984,7 @@ fn partition_scope_modules<'b>(
     let span = tracing::info_span!("esbuild: scope partition modules", count = boundaries.len());
     let _enter = span.enter();
     let mut metas: Vec<ScopeModuleMeta> = Vec::new();
-    let mut consumed: HashSet<usize> = HashSet::new();
+    let mut consumed: HashSet<usize> = HashSet::default();
     let scope_candidate_atoms: HashSet<Atom> = item_infos
         .iter()
         .flat_map(|info| info.declared.iter().map(|(atom, _)| atom.clone()))
@@ -3037,11 +3038,11 @@ fn partition_scope_modules<'b>(
         };
 
         let mut body_indices: Vec<usize> = Vec::new();
-        let mut declared_bindings: HashSet<BindingId> = HashSet::new();
-        let mut local_import_bindings: HashSet<BindingId> = HashSet::new();
-        let mut referenced_bindings: HashSet<BindingId> = HashSet::new();
-        let mut written_atoms: HashSet<Atom> = HashSet::new();
-        let mut referenced_atoms: HashSet<Atom> = HashSet::new();
+        let mut declared_bindings: HashSet<BindingId> = HashSet::default();
+        let mut local_import_bindings: HashSet<BindingId> = HashSet::default();
+        let mut referenced_bindings: HashSet<BindingId> = HashSet::default();
+        let mut written_atoms: HashSet<Atom> = HashSet::default();
+        let mut referenced_atoms: HashSet<Atom> = HashSet::default();
 
         for i in start..end {
             consumed.insert(i);
@@ -3082,8 +3083,8 @@ fn partition_scope_modules<'b>(
 
             let mut atom_collector = AtomRefCollector {
                 candidate_atoms: &reference_candidate_atoms,
-                references: HashSet::new(),
-                shadowed_atoms: vec![HashSet::new()],
+                references: HashSet::default(),
+                shadowed_atoms: vec![HashSet::default()],
             };
             analysis_item_for_visits.visit_with(&mut atom_collector);
             body_indices.push(i);
@@ -3123,7 +3124,7 @@ fn partition_scope_modules<'b>(
                 export_entries: boundary.export_entries.clone(),
             }],
             body_indices,
-            owned_support_bindings: HashSet::new(),
+            owned_support_bindings: HashSet::default(),
             exported_bindings: boundary.exported_bindings.clone(),
             exported_atoms,
             declared_bindings,
@@ -3181,7 +3182,7 @@ fn build_scope_binding_maps(
 }
 
 fn scope_binding_to_module(metas: &[ScopeModuleMeta]) -> HashMap<BindingId, usize> {
-    let mut binding_to_module = HashMap::new();
+    let mut binding_to_module = HashMap::default();
     for (mi, meta) in metas.iter().enumerate() {
         for namespace in &meta.namespaces {
             binding_to_module.insert(namespace.namespace_binding.clone(), mi);
@@ -3221,7 +3222,7 @@ fn adopt_scope_support_decls(
     let factory_importable_bindings = refs.factory_importable_bindings;
     let drop_unowned_helper_sibling_indices = refs.drop_unowned_helper_sibling_indices;
 
-    let mut owned_support_by_index: HashMap<usize, HashSet<BindingId>> = HashMap::new();
+    let mut owned_support_by_index: HashMap<usize, HashSet<BindingId>> = HashMap::default();
     for (mi, meta) in metas.iter_mut().enumerate() {
         let module_start = meta
             .body_indices
@@ -3272,8 +3273,8 @@ fn adopt_scope_support_decls(
 
             let mut atom_collector = AtomRefCollector {
                 candidate_atoms: reference_candidate_atoms,
-                references: HashSet::new(),
-                shadowed_atoms: vec![HashSet::new()],
+                references: HashSet::default(),
+                shadowed_atoms: vec![HashSet::default()],
             };
             analysis_items[decl_index].visit_with(&mut atom_collector);
             meta.referenced_atoms.extend(atom_collector.references);
@@ -3302,7 +3303,7 @@ fn adopt_scope_support_decls(
             .collect();
         indices.sort_unstable();
         indices.dedup();
-        let mut factory_written_atoms = HashSet::new();
+        let mut factory_written_atoms = HashSet::default();
         for index in indices {
             let Some(item) = filter_item_to_owned_bindings(&analysis_items[index], &owned_atoms)
             else {
@@ -3464,14 +3465,14 @@ fn scope_evaluation_profile(
     item_infos: &[ItemBindingInfo],
 ) -> ScopeEvaluationProfile {
     let mut profile = ScopeEvaluationProfile {
-        eager: HashSet::new(),
-        guards: HashMap::new(),
-        unprovable: HashSet::new(),
+        eager: HashSet::default(),
+        guards: HashMap::default(),
+        unprovable: HashSet::default(),
     };
     for &i in &meta.body_indices {
         let item = &analysis_items[i];
         let mut eager = EagerRefCollector {
-            references: HashSet::new(),
+            references: HashSet::default(),
         };
         item.visit_with(&mut eager);
         let guard = item_guard_binding(item);
@@ -3527,7 +3528,7 @@ fn early_scope_references(
     metas: &[ScopeModuleMeta],
     profiles: &[ScopeEvaluationProfile],
 ) -> HashSet<BindingId> {
-    let mut dependents: HashMap<BindingId, HashSet<BindingId>> = HashMap::new();
+    let mut dependents: HashMap<BindingId, HashSet<BindingId>> = HashMap::default();
     let mut pending = Vec::new();
     for (meta, profile) in metas.iter().zip(profiles) {
         pending.extend(profile.eager.iter().cloned());
@@ -3559,7 +3560,7 @@ fn early_scope_references(
                 .extend(meta.exported_bindings.iter().cloned());
         }
     }
-    let mut reachable = HashSet::new();
+    let mut reachable = HashSet::default();
     while let Some(binding) = pending.pop() {
         if reachable.insert(binding.clone()) {
             if let Some(references) = dependents.get(&binding) {
@@ -3659,7 +3660,7 @@ fn compute_scope_imports_exports(
         .filter(|i| !consumed.contains(i))
         .collect();
 
-    let mut entry_referenced: HashSet<BindingId> = HashSet::new();
+    let mut entry_referenced: HashSet<BindingId> = HashSet::default();
     for &i in &remaining_indices {
         entry_referenced.extend(item_infos[i].references.iter().cloned());
     }
@@ -3708,8 +3709,8 @@ fn compute_scope_imports_exports(
         }
     }
 
-    let mut claimed_factory_filenames: HashMap<String, String> = HashMap::new();
-    let mut conflicted_factory_filenames: HashSet<String> = HashSet::new();
+    let mut claimed_factory_filenames: HashMap<String, String> = HashMap::default();
+    let mut conflicted_factory_filenames: HashSet<String> = HashSet::default();
     for meta in metas.iter() {
         for atom in &meta.written_atoms {
             let Some((_, factory_filename)) = factory_preassigned_by_atom.get(atom) else {
@@ -3738,7 +3739,7 @@ fn compute_scope_imports_exports(
         .iter()
         .map(|(binding, &mi)| (binding.clone(), metas[mi].filename.clone()))
         .collect();
-    let mut scope_claimed_factory_bindings: HashMap<BindingId, String> = HashMap::new();
+    let mut scope_claimed_factory_bindings: HashMap<BindingId, String> = HashMap::default();
     for (binding, filename) in factory_preassigned_bindings {
         let owner_filename = claimed_factory_filenames
             .get(filename)
@@ -3828,8 +3829,8 @@ fn compute_scope_imports_exports(
         .map(|meta| scope_evaluation_profile(meta, analysis_items, item_infos))
         .collect();
     let early_references = early_scope_references(metas, &profiles);
-    let mut scope_needed_entry_bindings: HashSet<BindingId> = HashSet::new();
-    let mut unsafe_entry_bindings: HashSet<BindingId> = HashSet::new();
+    let mut scope_needed_entry_bindings: HashSet<BindingId> = HashSet::default();
+    let mut unsafe_entry_bindings: HashSet<BindingId> = HashSet::default();
     for (meta, profile) in metas.iter().zip(&profiles) {
         let namespace_read_early = meta
             .namespaces
@@ -3926,9 +3927,9 @@ fn emit_scope_modules(
     } = ie;
     let factory_preassigned_bindings = refs.factory_preassigned_bindings;
 
-    let mut module_local_atoms: HashMap<String, HashSet<Atom>> = HashMap::new();
+    let mut module_local_atoms: HashMap<String, HashSet<Atom>> = HashMap::default();
     let mut modules = Vec::new();
-    let mut module_referenced_atoms: HashMap<String, HashSet<Atom>> = HashMap::new();
+    let mut module_referenced_atoms: HashMap<String, HashSet<Atom>> = HashMap::default();
 
     for (mi, meta) in metas.iter().enumerate() {
         let mut module_items: Vec<ModuleItem> = Vec::new();
@@ -3939,9 +3940,9 @@ fn emit_scope_modules(
             .iter()
             .map(|(atom, _)| atom.clone())
             .collect();
-        let mut imports_by_source: HashMap<usize, Vec<BindingId>> = HashMap::new();
-        let mut imports_by_filename: HashMap<String, Vec<BindingId>> = HashMap::new();
-        let mut external_import_bindings: HashSet<BindingId> = HashSet::new();
+        let mut imports_by_source: HashMap<usize, Vec<BindingId>> = HashMap::default();
+        let mut imports_by_filename: HashMap<String, Vec<BindingId>> = HashMap::default();
+        let mut external_import_bindings: HashSet<BindingId> = HashSet::default();
         for ref_binding in &meta.referenced_bindings {
             if meta.declared_bindings.contains(ref_binding) {
                 continue;
@@ -4091,7 +4092,7 @@ fn emit_scope_modules(
         let mut external_import_bindings: Vec<BindingId> =
             external_import_bindings.into_iter().collect();
         external_import_bindings.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut external_imported_atoms = HashSet::new();
+        let mut external_imported_atoms = HashSet::default();
         for binding in external_import_bindings {
             if declared_atoms.contains(&binding.0) {
                 continue;
@@ -4116,7 +4117,7 @@ fn emit_scope_modules(
         );
         let mut import_sources: Vec<usize> = imports_by_source.keys().copied().collect();
         import_sources.sort();
-        let mut imported_atoms = HashSet::new();
+        let mut imported_atoms = HashSet::default();
         for source_mi in import_sources {
             let bindings = imports_by_source.get_mut(&source_mi).unwrap();
             bindings.sort_by(|a, b| a.0.cmp(&b.0));
@@ -4308,7 +4309,7 @@ fn build_scope_entry(
 
     // Track which external bindings each scope-hoisted module already imports
     // (used later to avoid duplicate imports when merging init factories).
-    let mut module_already_imports: HashMap<String, HashSet<BindingId>> = HashMap::new();
+    let mut module_already_imports: HashMap<String, HashSet<BindingId>> = HashMap::default();
     for meta in metas.iter() {
         let imported: HashSet<BindingId> = meta
             .referenced_bindings
@@ -4373,7 +4374,7 @@ fn build_scope_entry(
     // resolve correctly.
     let mut restored_items: Vec<ModuleItem> = Vec::new();
     let mut synthesized_entry_exports: Vec<Atom> = Vec::new();
-    let mut restored_namespace_bindings: HashSet<BindingId> = HashSet::new();
+    let mut restored_namespace_bindings: HashSet<BindingId> = HashSet::default();
     for &(ns_idx, call_idx, boundary) in consumed_ns.iter() {
         let entry_needs = entry_referenced.contains(&boundary.ns_binding);
         let factory_needs = factory_referenced.contains(&boundary.ns_binding);
@@ -4426,7 +4427,7 @@ fn build_scope_entry(
         synthesized_entry_exports.dedup();
         restored_items.push(make_named_export_stmt(&synthesized_entry_exports));
     }
-    let mut entry_imports: HashMap<usize, Vec<BindingId>> = HashMap::new();
+    let mut entry_imports: HashMap<usize, Vec<BindingId>> = HashMap::default();
     for ref_binding in entry_referenced.iter() {
         if restored_namespace_bindings.contains(ref_binding) {
             continue;
@@ -4487,7 +4488,7 @@ fn build_scope_entry(
             ));
         }
     }
-    let mut entry_factory_imports: HashMap<String, Vec<BindingId>> = HashMap::new();
+    let mut entry_factory_imports: HashMap<String, Vec<BindingId>> = HashMap::default();
     for ref_binding in entry_referenced.iter() {
         if let Some(source_filename) = factory_preassigned_bindings.get(ref_binding) {
             let source_filename = binding_to_filename
@@ -4844,14 +4845,14 @@ fn removable_export_helper_dependency_indices(
     item_infos: &[ItemBindingInfo],
     boundaries: &[ScopeHoistedBoundary],
 ) -> HashSet<usize> {
-    let mut binding_to_index = HashMap::new();
+    let mut binding_to_index = HashMap::default();
     for (index, info) in item_infos.iter().enumerate() {
         for binding in &info.declared {
             binding_to_index.entry(binding.clone()).or_insert(index);
         }
     }
 
-    let mut closure = HashSet::new();
+    let mut closure = HashSet::default();
     let mut stack = vec![export_helper_index];
     while let Some(index) = stack.pop() {
         if !closure.insert(index) {
@@ -4963,7 +4964,7 @@ fn build_item_binding_infos(items: &[ModuleItem]) -> Vec<ItemBindingInfo> {
         .map(|(item, declared)| {
             let mut collector = TopLevelRefCollector {
                 top_level_bindings: &top_level_bindings,
-                references: HashSet::new(),
+                references: HashSet::default(),
             };
             item.visit_with(&mut collector);
             ItemBindingInfo {
@@ -4981,7 +4982,7 @@ fn item_binding_info_for(
     let declared: HashSet<BindingId> = module_item_declared_binding_ids(item).into_iter().collect();
     let mut collector = TopLevelRefCollector {
         top_level_bindings,
-        references: HashSet::new(),
+        references: HashSet::default(),
     };
     item.visit_with(&mut collector);
     ItemBindingInfo {
@@ -5053,7 +5054,7 @@ fn collect_external_imports(
     analysis_items: &[ModuleItem],
     source_items: &[ModuleItem],
 ) -> HashMap<BindingId, ExternalImport> {
-    let mut imports = HashMap::new();
+    let mut imports = HashMap::default();
     for (analysis_item, source_item) in analysis_items.iter().zip(source_items) {
         let ModuleItem::ModuleDecl(ModuleDecl::Import(analysis_import)) = analysis_item else {
             continue;
@@ -5152,13 +5153,13 @@ impl Visit for AtomRefCollector<'_> {
     }
 
     fn visit_function(&mut self, function: &Function) {
-        self.shadowed_atoms.push(HashSet::new());
+        self.shadowed_atoms.push(HashSet::default());
         function.visit_children_with(self);
         self.shadowed_atoms.pop();
     }
 
     fn visit_arrow_expr(&mut self, expr: &ArrowExpr) {
-        self.shadowed_atoms.push(HashSet::new());
+        self.shadowed_atoms.push(HashSet::default());
         expr.visit_children_with(self);
         self.shadowed_atoms.pop();
     }
@@ -5442,7 +5443,7 @@ fn scope_write_atoms_for_item(
 ) -> HashSet<Atom> {
     let mut local_collector = NonTopLevelBindingCollector {
         top_level_bindings,
-        local_bindings: HashSet::new(),
+        local_bindings: HashSet::default(),
     };
     item.visit_with(&mut local_collector);
 
@@ -5450,7 +5451,7 @@ fn scope_write_atoms_for_item(
         top_level_bindings,
         top_level_atoms,
         local_bindings: &local_collector.local_bindings,
-        writes: HashSet::new(),
+        writes: HashSet::default(),
     };
     item.visit_with(&mut write_collector);
     write_collector.writes
@@ -5602,7 +5603,7 @@ fn make_namespace_define_property_items(
     entries: &[(Atom, BindingId)],
 ) -> Vec<ModuleItem> {
     let mut items = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     for (export_name, (binding_name, _)) in entries {
         if !seen.insert(export_name.clone()) {
             continue;
@@ -5752,7 +5753,8 @@ fn retain_owned_support_source_items(
     source_slots: &mut [Option<ModuleItem>],
     owned_support_by_index: &HashMap<usize, HashSet<BindingId>>,
 ) -> HashMap<usize, ModuleItem> {
-    let mut originals = HashMap::with_capacity(owned_support_by_index.len());
+    let mut originals =
+        HashMap::with_capacity_and_hasher(owned_support_by_index.len(), Default::default());
     for (index, owned) in owned_support_by_index {
         let owned_atoms: HashSet<Atom> = owned.iter().map(|(atom, _)| atom.clone()).collect();
         if let Some(item) = source_slots[*index].take() {
@@ -5834,7 +5836,7 @@ fn filter_decl_to_owned_bindings(decl: &Decl, owned_atoms: &HashSet<Atom>) -> Op
                 .iter()
                 .flat_map(|decl| pat_declared_binding_ids(&decl.name))
                 .collect();
-            let mut keep_atoms: HashSet<Atom> = HashSet::new();
+            let mut keep_atoms: HashSet<Atom> = HashSet::default();
             for decl in &var_decl.decls {
                 let decl_atoms: Vec<Atom> = pat_declared_binding_ids(&decl.name)
                     .into_iter()
@@ -5846,7 +5848,7 @@ fn filter_decl_to_owned_bindings(decl: &Decl, owned_atoms: &HashSet<Atom>) -> Op
                 keep_atoms.extend(decl_atoms);
                 let mut collector = TopLevelRefCollector {
                     top_level_bindings: &stmt_bindings,
-                    references: HashSet::new(),
+                    references: HashSet::default(),
                 };
                 decl.visit_with(&mut collector);
                 keep_atoms.extend(collector.references.into_iter().map(|(atom, _)| atom));
@@ -6074,7 +6076,7 @@ mod tests {
             };
             let filtered = filter_item_to_owned_bindings(
                 &module.body[0],
-                &HashSet::from([Atom::from("left")]),
+                &HashSet::from_iter([Atom::from("left")]),
             )
             .unwrap();
             let ModuleItem::Stmt(Stmt::Decl(Decl::Var(filtered))) = filtered else {
@@ -6122,7 +6124,7 @@ mod tests {
                                     &module.body,
                                     &indices,
                                     &bindings,
-                                    &HashSet::new(),
+                                    &HashSet::default(),
                                 ),
                                 collect_top_level_decl_writes(&module.body, &indices, &bindings),
                             )
@@ -6187,7 +6189,7 @@ mod tests {
                 &module.body,
                 &indices,
                 &top_level_bindings,
-                &HashSet::new(),
+                &HashSet::default(),
             );
             let binding_named = |name: &str| {
                 top_level_bindings
@@ -6223,8 +6225,8 @@ mod tests {
                 .into_iter()
                 .find(|(name, _)| name == "owned")
                 .expect("owned binding should exist");
-            let owned = HashSet::from([owned_binding.clone()]);
-            let owned_by_index = HashMap::from([(0, owned.clone())]);
+            let owned = HashSet::from_iter([owned_binding.clone()]);
+            let owned_by_index = HashMap::from_iter([(0, owned.clone())]);
             let mut source_slots = module.body.into_iter().map(Some).collect::<Vec<_>>();
 
             let originals = retain_owned_support_source_items(&mut source_slots, &owned_by_index);
@@ -6240,11 +6242,11 @@ mod tests {
             .into_iter()
             .map(|(name, _)| name.to_string())
             .collect::<HashSet<_>>();
-            assert_eq!(remaining_names, HashSet::from(["keep".to_string()]));
+            assert_eq!(remaining_names, HashSet::from_iter(["keep".to_string()]));
 
             let recovered = scope_owned_support_decl_items(
                 &owned,
-                &HashMap::from([(owned_binding, 0)]),
+                &HashMap::from_iter([(owned_binding, 0)]),
                 &originals,
             );
             let recovered_names = recovered
@@ -6252,7 +6254,7 @@ mod tests {
                 .flat_map(module_item_declared_binding_ids)
                 .map(|(name, _)| name.to_string())
                 .collect::<HashSet<_>>();
-            assert_eq!(recovered_names, HashSet::from(["owned".to_string()]));
+            assert_eq!(recovered_names, HashSet::from_iter(["owned".to_string()]));
         });
     }
 
@@ -6304,7 +6306,7 @@ var ignored = 1, value = wrap(() => assigned = shared);
 
             assert!(references.contains(&binding_named("shared")));
             assert!(references.contains(&binding_named("assigned")));
-            assert_eq!(writes, HashSet::from([binding_named("assigned")]));
+            assert_eq!(writes, HashSet::from_iter([binding_named("assigned")]));
         });
     }
 
@@ -6410,7 +6412,8 @@ var five = y({ "five.js"() { fifth(); } });
                 cm,
             )
             .expect("fixture should parse");
-            let factory_syms = HashSet::from([Atom::from("factory"), Atom::from("other_factory")]);
+            let factory_syms =
+                HashSet::from_iter([Atom::from("factory"), Atom::from("other_factory")]);
 
             assert!(filter_helper_factory_declarators(&module.body[0], &factory_syms).is_none());
             let filtered = filter_helper_factory_declarators(&module.body[1], &factory_syms)
@@ -6419,7 +6422,7 @@ var five = y({ "five.js"() { fifth(); } });
                 .into_iter()
                 .map(|(atom, _)| atom)
                 .collect::<HashSet<_>>();
-            assert_eq!(remaining, HashSet::from([Atom::from("keep")]));
+            assert_eq!(remaining, HashSet::from_iter([Atom::from("keep")]));
         });
     }
 
@@ -6432,8 +6435,8 @@ var five = y({ "five.js"() { fifth(); } });
                 candidates.iter().map(|name| Atom::from(*name)).collect();
             let mut collector = AtomRefCollector {
                 candidate_atoms: &candidate_atoms,
-                references: HashSet::new(),
-                shadowed_atoms: vec![HashSet::new()],
+                references: HashSet::default(),
+                shadowed_atoms: vec![HashSet::default()],
             };
             module.visit_with(&mut collector);
             collector.references
@@ -6486,7 +6489,7 @@ use(JA, KA);
 
         assert_eq!(
             refs,
-            HashSet::from([Atom::from("JA"), Atom::from("KA")]),
+            HashSet::from_iter([Atom::from("JA"), Atom::from("KA")]),
             "assignment targets are uses of existing bindings, not shadow declarations"
         );
     }
@@ -6501,7 +6504,7 @@ use(JA, KA);
                 cm.clone(),
             )
             .expect("fixture should parse");
-            let binding_to_filename = HashMap::from([(
+            let binding_to_filename = HashMap::from_iter([(
                 (Atom::from("state"), Default::default()),
                 "owner.js".to_string(),
             )]);
@@ -6518,7 +6521,7 @@ use(JA, KA);
 
     #[test]
     fn import_augmentation_only_adds_specifiers_to_existing_sources() {
-        let mut binding_to_filename = HashMap::new();
+        let mut binding_to_filename = HashMap::default();
         binding_to_filename.insert((Atom::from("NT"), Default::default()), "NT.js".to_string());
         binding_to_filename.insert((Atom::from("JA"), Default::default()), "NT.js".to_string());
         binding_to_filename.insert(
@@ -6529,7 +6532,7 @@ use(JA, KA);
             .into_iter()
             .collect();
         let mut imports_by_source =
-            HashMap::from([(String::from("NT.js"), vec![Atom::from("NT")])]);
+            HashMap::from_iter([(String::from("NT.js"), vec![Atom::from("NT")])]);
         let binding_filename_by_atom = atom_to_filename_binding_map(&binding_to_filename);
 
         augment_imports_with_referenced_atoms_for_existing_sources(
@@ -6550,7 +6553,7 @@ use(JA, KA);
 
     #[test]
     fn factory_atom_import_can_create_filename_edge() {
-        let mut imports_by_filename = HashMap::new();
+        let mut imports_by_filename = HashMap::default();
         let binding = (Atom::from("RT6"), Default::default());
 
         add_factory_atom_import(&mut imports_by_filename, "Zaq_2.js", &binding, "RT6.js");

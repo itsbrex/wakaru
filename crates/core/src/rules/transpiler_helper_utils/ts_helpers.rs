@@ -5,7 +5,7 @@
 //! UnAsyncAwait matches detected `__awaiter` / `__generator` aliases rather than
 //! mapping them to a semantic kind).
 
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::common::Mark;
 use swc_core::ecma::ast::{
@@ -25,7 +25,7 @@ pub(super) fn collect_ts_helpers(
     tslib_namespaces: &HashSet<BindingKey>,
     unresolved_mark: Option<Mark>,
 ) -> HashMap<BindingKey, TsHelperInfo> {
-    let mut helpers = HashMap::new();
+    let mut helpers = HashMap::default();
 
     for item in &module.body {
         match item {
@@ -137,7 +137,7 @@ pub(crate) fn collect_inline_ts_helpers_deep(module: &Module) -> HashMap<Binding
 
         fn visit_var_declarator(&mut self, decl: &VarDeclarator) {
             if let Some((key, helper)) =
-                collect_ts_helper_from_var_decl(decl, &HashSet::new(), None)
+                collect_ts_helper_from_var_decl(decl, &HashSet::default(), None)
             {
                 if helper.source == TsHelperSource::Inline {
                     self.helpers.insert(key, helper.kind);
@@ -165,7 +165,7 @@ pub(crate) fn collect_inline_ts_helpers_deep(module: &Module) -> HashMap<Binding
     }
 
     let mut collector = Collector {
-        helpers: HashMap::new(),
+        helpers: HashMap::default(),
     };
     module.visit_with(&mut collector);
     collector.helpers
@@ -269,7 +269,7 @@ pub(crate) fn collect_tslib_namespace_bindings(
     module: &Module,
     unresolved_mark: Option<Mark>,
 ) -> HashSet<BindingKey> {
-    let mut bindings = HashSet::new();
+    let mut bindings = HashSet::default();
 
     for item in &module.body {
         match item {
@@ -387,7 +387,7 @@ pub(super) fn collect_tslib_require_member_calls(
     }
 
     let mut finder = Finder {
-        kinds: HashSet::new(),
+        kinds: HashSet::default(),
         unresolved_mark,
     };
     module.visit_with(&mut finder);
@@ -590,8 +590,8 @@ fn ts_factory_local_is_private(
     }
     let remaining = super::remaining_refs_outside_var_declarators(
         module,
-        &HashSet::from([local.clone()]),
-        &HashSet::from([key.clone(), local.clone()]),
+        &HashSet::from_iter([local.clone()]),
+        &HashSet::from_iter([key.clone(), local.clone()]),
     );
     remaining.is_empty()
 }

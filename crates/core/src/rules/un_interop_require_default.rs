@@ -1,5 +1,5 @@
+use crate::collections::{HashMap, HashSet};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::DUMMY_SP;
@@ -38,7 +38,7 @@ impl VisitMut for UnInteropRequireDefault {
 }
 
 fn run_un_interop_require_default(module: &mut Module, local_helpers: &LocalHelperContext) {
-    let mut affected_bindings: HashSet<BindingKey> = HashSet::new();
+    let mut affected_bindings: HashSet<BindingKey> = HashSet::default();
     let mut preserve_named_helpers = false;
 
     // --- Named helper path ---
@@ -115,7 +115,7 @@ fn run_un_interop_require_default(module: &mut Module, local_helpers: &LocalHelp
     // Phase 2b: Rewrite `.default` member access on affected bindings,
     //           but only if the binding is never reassigned.
     if !affected_bindings.is_empty() {
-        let mut reassigned = HashSet::new();
+        let mut reassigned = HashSet::default();
         let mut checker = ReassignmentChecker {
             candidates: &affected_bindings,
             reassigned: &mut reassigned,
@@ -278,7 +278,7 @@ fn collect_all_identifier_names(module: &Module) -> HashSet<Atom> {
     }
 
     let mut collector = Collector {
-        names: HashSet::new(),
+        names: HashSet::default(),
     };
     module.visit_with(&mut collector);
     collector.names
@@ -338,7 +338,7 @@ fn collect_assignment_form_initializers(
 ) -> HashSet<usize> {
     let require_declarations = collect_top_level_require_declarations(module, local_helpers);
     let top_level_functions = collect_top_level_functions(module);
-    let mut matched_indices = HashSet::new();
+    let mut matched_indices = HashSet::default();
 
     for (index, item) in module.body.iter().enumerate() {
         let Some(binding) = assignment_form_initializer_binding(item, local_helpers) else {
@@ -406,7 +406,7 @@ fn collect_assignment_form_initializers(
 }
 
 fn collect_top_level_functions(module: &Module) -> HashMap<BindingKey, &Function> {
-    let mut functions = HashMap::new();
+    let mut functions = HashMap::default();
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) = item else {
             continue;
@@ -439,7 +439,7 @@ fn item_can_invoke_pre_initializer_read(
     local_helpers: &LocalHelperContext,
     top_level_functions: &HashMap<BindingKey, &Function>,
 ) -> bool {
-    let visiting = RefCell::new(HashSet::new());
+    let visiting = RefCell::new(HashSet::default());
     let mut scanner = ImmediateInvocationScanner {
         binding,
         local_helpers,
@@ -730,7 +730,7 @@ fn collect_top_level_require_declarations(
     module: &Module,
     local_helpers: &LocalHelperContext,
 ) -> HashMap<BindingKey, usize> {
-    let mut declarations = HashMap::new();
+    let mut declarations = HashMap::default();
 
     for (index, item) in module.body.iter().enumerate() {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) = item else {
@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     fn namespace_import_name_uses_delimited_suffix() {
-        let mut used_names = HashSet::from([Atom::from("_value")]);
+        let mut used_names = HashSet::from_iter([Atom::from("_value")]);
 
         assert_eq!(
             fresh_namespace_import_name(&Atom::from("value"), &mut used_names),

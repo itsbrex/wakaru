@@ -76,9 +76,9 @@ struct RuleRunContext<'a> {
 
 pub(super) struct PreDeadSet {
     pub decl_spans:
-        std::collections::HashSet<(swc_core::common::BytePos, swc_core::common::BytePos)>,
+        crate::collections::HashSet<(swc_core::common::BytePos, swc_core::common::BytePos)>,
     pub preserved_import_spans:
-        std::collections::HashSet<(swc_core::common::BytePos, swc_core::common::BytePos)>,
+        crate::collections::HashSet<(swc_core::common::BytePos, swc_core::common::BytePos)>,
 }
 
 impl RuleRunContext<'_> {
@@ -903,7 +903,7 @@ fn apply_rules_impl(
         module_facts: options.module_facts,
         current_filename: options.current_filename,
         local_helpers: Rc::new(RefCell::new(None)),
-        extracted_function_names: Rc::new(RefCell::new(ExtractedFunctionNames::new())),
+        extracted_function_names: Rc::new(RefCell::new(ExtractedFunctionNames::default())),
         pre_dead,
     };
     let mut started = options.start_from.is_none();

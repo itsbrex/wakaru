@@ -226,7 +226,7 @@ fn local_helper_context_collects_helper_dependencies() {
                 "#,
         );
         let context = LocalHelperContext::collect(&module);
-        let roots = HashMap::from([(
+        let roots = HashMap::from_iter([(
             (Atom::from("root"), SyntaxContext::empty()),
             TranspilerHelperKind::SlicedToArray,
         )]);
@@ -257,7 +257,7 @@ fn removes_helpers_without_remaining_refs_only_when_unused() {
                 const value = 1;
                 "#,
         );
-        let helpers = HashMap::from([(
+        let helpers = HashMap::from_iter([(
             (Atom::from("helper"), SyntaxContext::empty()),
             TranspilerHelperKind::ClassCallCheck,
         )]);
@@ -274,7 +274,7 @@ fn removes_helpers_without_remaining_refs_only_when_unused() {
                 helper(1);
                 "#,
         );
-        let helpers = HashMap::from([(
+        let helpers = HashMap::from_iter([(
             (Atom::from("helper"), SyntaxContext::empty()),
             TranspilerHelperKind::ClassCallCheck,
         )]);
@@ -302,7 +302,7 @@ fn removes_helper_dependencies_with_consumed_root() {
                 "#,
         );
         let context = LocalHelperContext::collect(&module);
-        let roots = HashMap::from([(
+        let roots = HashMap::from_iter([(
             (Atom::from("root"), SyntaxContext::empty()),
             TranspilerHelperKind::SlicedToArray,
         )]);
@@ -336,7 +336,7 @@ fn keeps_dependency_of_a_helper_that_stays_referenced() {
                 "#,
         );
         let context = LocalHelperContext::collect(&module);
-        let roots = HashMap::from([(
+        let roots = HashMap::from_iter([(
             (Atom::from("root"), SyntaxContext::empty()),
             TranspilerHelperKind::SlicedToArray,
         )]);
@@ -362,7 +362,7 @@ fn removing_helper_imports_keeps_side_effect_imports() {
                 import "./other.css";
                 "#,
         );
-        let helpers = HashMap::from([(
+        let helpers = HashMap::from_iter([(
             (Atom::from("helper"), SyntaxContext::empty()),
             TranspilerHelperKind::DefineProperty,
         )]);

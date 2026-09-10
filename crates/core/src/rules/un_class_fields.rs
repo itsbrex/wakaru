@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, SyntaxContext, DUMMY_SP};
@@ -60,8 +60,8 @@ struct PrivateHelperCallees {
 impl PrivateHelperCallees {
     fn empty(kind: TsHelperKind, unresolved_mark: Mark) -> Self {
         Self {
-            bindings: HashSet::new(),
-            namespaces: HashSet::new(),
+            bindings: HashSet::default(),
+            namespaces: HashSet::default(),
             kind,
             unresolved_mark,
         }
@@ -138,8 +138,8 @@ impl UnClassFields {
         Self {
             level,
             unresolved_mark,
-            define_property_helpers: HashSet::new(),
-            private_maps: HashMap::new(),
+            define_property_helpers: HashSet::default(),
+            private_maps: HashMap::default(),
             private_get_helpers: PrivateHelperCallees::empty(
                 TsHelperKind::ClassPrivateFieldGet,
                 unresolved_mark,
@@ -148,8 +148,8 @@ impl UnClassFields {
                 TsHelperKind::ClassPrivateFieldSet,
                 unresolved_mark,
             ),
-            private_single_owner_maps: HashSet::new(),
-            consumed_private_maps: HashSet::new(),
+            private_single_owner_maps: HashSet::default(),
+            consumed_private_maps: HashSet::default(),
         }
     }
 
@@ -268,7 +268,7 @@ impl VisitMut for UnClassFields {
         class.visit_mut_children_with(self);
 
         // Collect __init* method bodies
-        let mut init_bodies: HashMap<Atom, Vec<Stmt>> = HashMap::new();
+        let mut init_bodies: HashMap<Atom, Vec<Stmt>> = HashMap::default();
         for member in &class.body {
             let ClassMember::Method(method) = member else {
                 continue;
@@ -298,7 +298,8 @@ impl VisitMut for UnClassFields {
 
         // Find constructor and inline the __init calls
         let class_name = self.find_class_name(class);
-        let mut inlined_names: std::collections::HashSet<Atom> = std::collections::HashSet::new();
+        let mut inlined_names: crate::collections::HashSet<Atom> =
+            crate::collections::HashSet::default();
 
         if !init_bodies.is_empty() {
             for member in &mut class.body {
@@ -390,7 +391,7 @@ fn prop_name_str(key: &swc_core::ecma::ast::PropName) -> Option<String> {
 }
 
 fn collect_private_weak_maps(module: &Module, unresolved_mark: Mark) -> HashMap<BindingKey, Atom> {
-    let mut maps = HashMap::new();
+    let mut maps = HashMap::default();
     for item in &module.body {
         match item {
             ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) => {
@@ -424,10 +425,10 @@ fn collect_single_owner_private_maps(
     unresolved_mark: Mark,
 ) -> HashSet<BindingKey> {
     if private_maps.is_empty() {
-        return HashSet::new();
+        return HashSet::default();
     }
 
-    let mut class_counts: HashMap<BindingKey, usize> = HashMap::new();
+    let mut class_counts: HashMap<BindingKey, usize> = HashMap::default();
     let mut counter = PrivateMapClassConsumerCounter {
         private_maps,
         class_counts: &mut class_counts,
@@ -437,7 +438,7 @@ fn collect_single_owner_private_maps(
     let mut outside_finder = OutsidePrivateMapRefFinder {
         private_maps,
         unresolved_mark,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     module.visit_with(&mut outside_finder);
 
@@ -521,7 +522,7 @@ fn private_map_has_stable_lifetime(
         if let Some((class, binding)) = private_map_class_owner(item, unresolved_mark) {
             let mut refs = PrivateMapRefCollector {
                 private_maps,
-                refs: HashSet::new(),
+                refs: HashSet::default(),
             };
             class.body.visit_with(&mut refs);
             if refs.refs.contains(key) {
@@ -621,7 +622,7 @@ impl Visit for PrivateMapClassConsumerCounter<'_> {
     fn visit_class(&mut self, class: &Class) {
         let mut collector = PrivateMapRefCollector {
             private_maps: self.private_maps,
-            refs: HashSet::new(),
+            refs: HashSet::default(),
         };
         class.body.visit_with(&mut collector);
         for key in collector.refs {
@@ -1072,7 +1073,7 @@ fn promote_private_field_initializers(
         .iter()
         .position(|member| matches!(member, ClassMember::Constructor(_)))
     else {
-        return HashSet::new();
+        return HashSet::default();
     };
 
     let unsupported_private_maps: HashSet<BindingKey> = private_maps
@@ -1083,14 +1084,14 @@ fn promote_private_field_initializers(
 
     let (private_props, promoted_maps, remove_empty_ctor) = {
         let ClassMember::Constructor(ctor) = &mut class.body[ctor_index] else {
-            return HashSet::new();
+            return HashSet::default();
         };
         let Some(body) = &mut ctor.body else {
-            return HashSet::new();
+            return HashSet::default();
         };
         let blocked_bindings = constructor_blocked_bindings(&ctor.params);
         let mut private_props = Vec::new();
-        let mut promoted_maps = HashSet::new();
+        let mut promoted_maps = HashSet::default();
         let mut consumed = 0;
 
         for stmt in &body.stmts {
@@ -1130,7 +1131,7 @@ fn promote_private_field_initializers(
         }
 
         if private_props.is_empty() {
-            return HashSet::new();
+            return HashSet::default();
         }
 
         body.stmts.drain(0..consumed);

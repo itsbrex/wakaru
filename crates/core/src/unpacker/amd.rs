@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::collections::HashMap;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{sync::Lrc, SourceMap, Span, Spanned, SyntaxContext, DUMMY_SP};
@@ -178,7 +178,7 @@ fn emit_plain_umd_module(module: &Module, cm: Lrc<SourceMap>) -> Option<UnpackRe
     }
     let (factory, wrapper_span) = factory?;
 
-    let synthetic = factory_to_module(factory, &[], "module.js", "module", &HashMap::new())?;
+    let synthetic = factory_to_module(factory, &[], "module.js", "module", &HashMap::default())?;
     Some(UnpackResult::new(
         vec![UnpackedModule {
             id: "module".to_string(),

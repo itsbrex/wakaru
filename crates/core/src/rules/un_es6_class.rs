@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 use std::rc::Rc;
 
 use crate::analysis::binding_uses::BindingUseIndex;
@@ -126,7 +126,7 @@ fn used_ts_extends_imports(
     items: &[ModuleItem],
     helpers: &HashSet<BindingKey>,
 ) -> HashSet<BindingKey> {
-    let mut candidates = HashSet::new();
+    let mut candidates = HashSet::default();
     for item in items {
         if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item {
             if !import.type_only && is_tslib_path(import.src.value.as_str().unwrap_or("")) {
@@ -142,7 +142,7 @@ fn used_ts_extends_imports(
         }
     }
     if candidates.is_empty() {
-        return HashSet::new();
+        return HashSet::default();
     }
     let uses = BindingUseIndex::collect_module_items(items);
     candidates.retain(|key| uses.use_count(key) > 0);
@@ -276,7 +276,7 @@ impl UnEs6ClassInner {
     ) -> Self {
         Self {
             helpers: helper_context,
-            reused_var_bindings: HashSet::new(),
+            reused_var_bindings: HashSet::default(),
             inheritance_uses: None,
             unresolved_mark,
             rewrite_level,
@@ -453,7 +453,7 @@ impl VisitMut for UnEs6ClassInner {
 }
 
 fn collect_ts_extends_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for stmt in stmts {
         let Stmt::Decl(Decl::Var(var_decl)) = stmt else {
             continue;
@@ -474,7 +474,7 @@ fn collect_ts_extends_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> 
 }
 
 fn collect_ts_extends_helpers_from_items(items: &[ModuleItem]) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for item in items {
         let ModuleItem::Stmt(stmt) = item else {
             continue;
@@ -490,7 +490,7 @@ fn collect_tslib_namespaces_from_stmts(
     stmts: &[Stmt],
     unresolved_mark: Mark,
 ) -> HashSet<BindingKey> {
-    let mut namespaces = HashSet::new();
+    let mut namespaces = HashSet::default();
     for stmt in stmts {
         let Stmt::Decl(Decl::Var(var_decl)) = stmt else {
             continue;
@@ -514,7 +514,7 @@ fn collect_tslib_namespaces_from_items(
     items: &[ModuleItem],
     unresolved_mark: Mark,
 ) -> HashSet<BindingKey> {
-    let mut namespaces = HashSet::new();
+    let mut namespaces = HashSet::default();
     for item in items {
         match item {
             ModuleItem::ModuleDecl(ModuleDecl::Import(import))
@@ -549,7 +549,7 @@ fn collect_tslib_extends_helpers_from_stmts(
     namespaces: &HashSet<BindingKey>,
     unresolved_mark: Mark,
 ) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for stmt in stmts {
         let Stmt::Decl(Decl::Var(var_decl)) = stmt else {
             continue;
@@ -574,7 +574,7 @@ fn collect_tslib_extends_helpers_from_items(
     namespaces: &HashSet<BindingKey>,
     unresolved_mark: Mark,
 ) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for item in items {
         match item {
             ModuleItem::ModuleDecl(ModuleDecl::Import(import))
@@ -645,7 +645,7 @@ fn is_this_helper_member(expr: &Expr, helper_name: &str) -> bool {
 }
 
 fn collect_set_prototype_of_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for stmt in stmts {
         if let Stmt::Decl(Decl::Fn(fn_decl)) = stmt {
             if is_set_prototype_of_fn(&fn_decl.function) {
@@ -657,7 +657,7 @@ fn collect_set_prototype_of_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<Bindin
 }
 
 fn collect_set_prototype_of_helpers_from_items(items: &[ModuleItem]) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for item in items {
         if let ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) = item {
             if is_set_prototype_of_fn(&fn_decl.function) {
@@ -670,7 +670,7 @@ fn collect_set_prototype_of_helpers_from_items(items: &[ModuleItem]) -> HashSet<
 
 /// Collect names of functions that match the `_inherits` body shape from statements.
 fn collect_inherits_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for stmt in stmts {
         if let Stmt::Decl(Decl::Fn(fn_decl)) = stmt {
             if is_inherits_fn(&fn_decl.function) {
@@ -683,7 +683,7 @@ fn collect_inherits_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> {
 
 /// Collect names of functions that match the `_inherits` body shape from module items.
 fn collect_inherits_helpers_from_items(items: &[ModuleItem]) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for item in items {
         if let ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) = item {
             if is_inherits_fn(&fn_decl.function) {
@@ -696,7 +696,7 @@ fn collect_inherits_helpers_from_items(items: &[ModuleItem]) -> HashSet<BindingK
 
 /// Collect names of functions that match the `_callSuper` body shape from statements.
 fn collect_call_super_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for stmt in stmts {
         if let Stmt::Decl(Decl::Fn(fn_decl)) = stmt {
             if is_call_super_fn(&fn_decl.function) {
@@ -709,7 +709,7 @@ fn collect_call_super_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> 
 
 /// Collect names of functions that match the `_callSuper` body shape from module items.
 fn collect_call_super_helpers_from_items(items: &[ModuleItem]) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for item in items {
         if let ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) = item {
             if is_call_super_fn(&fn_decl.function) {
@@ -729,7 +729,7 @@ fn collect_create_class_helpers_from_stmts(
     stmts: &[Stmt],
     unresolved_mark: Mark,
 ) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for stmt in stmts {
         match stmt {
             Stmt::Decl(Decl::Fn(fn_decl)) => {
@@ -753,7 +753,7 @@ fn collect_create_class_helpers_from_items(
     items: &[ModuleItem],
     unresolved_mark: Mark,
 ) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for item in items {
         match item {
             ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) => {
@@ -1075,14 +1075,14 @@ fn ts_extends_helper_decl_key(var_decl: &VarDecl) -> Option<BindingKey> {
 
 struct BindingHelperRefCounter {
     helpers: HashSet<BindingKey>,
-    counts: std::collections::HashMap<BindingKey, usize>,
+    counts: crate::collections::HashMap<BindingKey, usize>,
 }
 
 impl BindingHelperRefCounter {
     fn new(helpers: &HashSet<BindingKey>) -> Self {
         Self {
             helpers: helpers.clone(),
-            counts: std::collections::HashMap::new(),
+            counts: crate::collections::HashMap::default(),
         }
     }
 }
@@ -2011,7 +2011,7 @@ impl VisitMut for TsSuperMethodCalls<'_> {
 fn class_member_has_invalid_signature(member: &ClassMember) -> bool {
     match member {
         ClassMember::Constructor(ctor) => {
-            let mut seen = HashSet::new();
+            let mut seen = HashSet::default();
             ctor.params.iter().any(|param| {
                 matches!(
                     param,
@@ -3609,8 +3609,8 @@ fn is_proto_or_get_prototype_of(expr: &Expr, unresolved_mark: Mark) -> bool {
 /// they are.
 fn cleanup_super_aliases(body: &mut FunctionBody) {
     // Pass 1: Find super() call statements and collect aliases
-    let mut aliases: HashSet<BindingKey> = HashSet::new();
-    let mut var_declared: HashSet<BindingKey> = HashSet::new();
+    let mut aliases: HashSet<BindingKey> = HashSet::default();
+    let mut var_declared: HashSet<BindingKey> = HashSet::default();
     for stmt in body.stmts.iter() {
         // Pattern: `var r = super(...)` as a var decl
         if let Stmt::Decl(Decl::Var(var)) = stmt {
@@ -3860,7 +3860,7 @@ fn collect_assign_chain_aliases(expr: &Expr, aliases: &mut HashSet<BindingKey>) 
     // Check if the RHS is super() or another assignment chain ending in super()
     let rhs_is_super = is_super_call(&assign.right)
         || matches!(assign.right.as_ref(), Expr::Assign(_) if {
-            let mut inner_aliases = HashSet::new();
+            let mut inner_aliases = HashSet::default();
             collect_assign_chain_aliases(&assign.right, &mut inner_aliases);
             !inner_aliases.is_empty()
         });

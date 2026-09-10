@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::{Atom, Wtf8Atom};
 use swc_core::common::util::take::Take;
@@ -71,7 +71,7 @@ impl UnJsx {
             function_depth: 0,
             used_names: Vec::new(),
             string_consts: Vec::new(),
-            import_pragmas: HashMap::new(),
+            import_pragmas: HashMap::default(),
             converted_classic_pragma: false,
         }
     }
@@ -916,7 +916,7 @@ fn collect_string_consts_from_stmts(stmts: &[Stmt]) -> HashMap<BindingId, Str> {
 }
 
 fn collect_import_pragmas(items: &[ModuleItem]) -> HashMap<BindingId, &'static str> {
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
     for item in items {
         let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
             continue;
@@ -1106,7 +1106,7 @@ fn collect_renamable_binding_ids(
     list_is_function_scope: bool,
 ) -> HashSet<BindingId> {
     let mut collector = RenamableBindingCollector {
-        ids: HashSet::new(),
+        ids: HashSet::default(),
         function_depth: 0,
         list_is_function_scope,
     };
@@ -1255,7 +1255,7 @@ fn display_name_renames(
     used_names: &mut HashSet<Atom>,
 ) -> Vec<BindingRename> {
     let mut renames = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     for (object, display_name) in candidates {
         let old: BindingId = (object.sym.clone(), object.ctxt);
         if !seen.insert(old.clone()) {

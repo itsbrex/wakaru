@@ -2,7 +2,7 @@
 //! top-level callable dependency graph, and removal of helper declarations once
 //! all their call sites have been rewritten.
 
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::ecma::ast::{Decl, Expr, Module, ModuleItem, Pat, Stmt};
 
@@ -42,7 +42,7 @@ pub(super) fn helper_dependencies_from_ref_graph(
     ref_graph: &HashMap<BindingKey, HashSet<BindingKey>>,
     helpers: &HashMap<BindingKey, TranspilerHelperKind>,
 ) -> HashMap<BindingKey, TranspilerHelperKind> {
-    let mut dependencies = HashSet::new();
+    let mut dependencies = HashSet::default();
     let mut stack: Vec<_> = helpers.keys().cloned().collect();
 
     while let Some(key) = stack.pop() {
@@ -65,7 +65,7 @@ pub(super) fn helper_dependencies_from_ref_graph(
 pub(super) fn collect_top_level_callable_ref_graph(
     module: &Module,
 ) -> HashMap<BindingKey, HashSet<BindingKey>> {
-    let mut candidates = HashSet::new();
+    let mut candidates = HashSet::default();
     for item in &module.body {
         match item {
             ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) => {
@@ -88,7 +88,7 @@ pub(super) fn collect_top_level_callable_ref_graph(
         }
     }
 
-    let mut refs = HashMap::new();
+    let mut refs = HashMap::default();
     for item in &module.body {
         match item {
             ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) => {

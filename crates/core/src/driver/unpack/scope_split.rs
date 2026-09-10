@@ -5,7 +5,7 @@
 //! extracted module is re-examined and split further when the result still
 //! resolves.
 
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::common::{sync::Lrc, Mark, SourceMap, GLOBALS};
 use swc_core::ecma::transforms::base::resolver;
@@ -21,7 +21,7 @@ pub(super) fn maybe_split_scope_hoisted_modules(
     enabled: bool,
     render_mode: scope_hoist::ScopeHoistRenderMode,
 ) -> UnpackResult {
-    maybe_split_scope_hoisted_modules_excluding(result, enabled, render_mode, &HashSet::new())
+    maybe_split_scope_hoisted_modules_excluding(result, enabled, render_mode, &HashSet::default())
 }
 
 pub(super) fn maybe_split_scope_hoisted_modules_excluding(
@@ -743,7 +743,7 @@ export const value = init + 1;
         available.insert("module-44444.js".to_string());
         assert!(scope_split_imports_resolve(&modules, &available));
 
-        let missing_entry = HashSet::from(["module-11111/chunk_value.js".to_string()]);
+        let missing_entry = HashSet::from_iter(["module-11111/chunk_value.js".to_string()]);
         assert!(!scope_split_imports_resolve(&modules, &missing_entry));
     }
 

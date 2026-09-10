@@ -1,7 +1,8 @@
+use crate::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::cell::Cell;
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::BinaryHeap;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{sync::Lrc, SourceMap, Span, Spanned, DUMMY_SP, GLOBALS};
@@ -659,11 +660,11 @@ fn item_referenced_and_written_names(
 ) -> (HashSet<Atom>, HashSet<Atom>) {
     let own: HashSet<&Atom> = own_names.iter().collect();
     let mut collector = RefCollector {
-        refs: HashSet::new(),
-        writes: HashSet::new(),
+        refs: HashSet::default(),
+        writes: HashSet::default(),
         own_names: &own,
-        block_bindings: HashSet::new(),
-        var_bindings: HashSet::new(),
+        block_bindings: HashSet::default(),
+        var_bindings: HashSet::default(),
     };
     item.visit_with(&mut collector);
     (collector.refs, collector.writes)
@@ -999,7 +1000,7 @@ fn collect_pat_bindings(pat: &Pat, bindings: &mut HashSet<Atom>) {
 }
 
 fn collect_dynamic_require_helpers(body: &[ModuleItem]) -> HashSet<Atom> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for item in body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
             continue;
@@ -1018,7 +1019,7 @@ fn collect_dynamic_require_helpers(body: &[ModuleItem]) -> HashSet<Atom> {
 }
 
 fn collect_esbuild_to_esm_helpers(body: &[ModuleItem]) -> HashSet<Atom> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for item in body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
             continue;
@@ -1166,7 +1167,7 @@ impl VisitMut for DynamicRequireHelperRewriter<'_> {
     }
 
     fn visit_mut_arrow_expr(&mut self, arrow: &mut ArrowExpr) {
-        let mut names = HashSet::new();
+        let mut names = HashSet::default();
         for param in &arrow.params {
             collect_pat_bindings(param, &mut names);
         }
@@ -1179,7 +1180,7 @@ impl VisitMut for DynamicRequireHelperRewriter<'_> {
     }
 
     fn visit_mut_block_stmt(&mut self, block: &mut BlockStmt) {
-        let mut names = HashSet::new();
+        let mut names = HashSet::default();
         collect_local_bindings_from_stmts(&block.stmts, &mut names);
         self.push_shadowed(names);
         block.visit_mut_children_with(self);
@@ -1198,7 +1199,7 @@ impl VisitMut for DynamicRequireHelperRewriter<'_> {
 }
 
 fn collect_local_bindings_from_function(function: &Function) -> HashSet<Atom> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     if let Some(body) = &function.body {
         collect_local_bindings_from_stmts(&body.stmts, &mut names);
     }
@@ -1352,7 +1353,7 @@ impl VisitMut for DefaultInteropMemberRewriter<'_> {
     }
 
     fn visit_mut_arrow_expr(&mut self, arrow: &mut ArrowExpr) {
-        let mut names = HashSet::new();
+        let mut names = HashSet::default();
         for param in &arrow.params {
             collect_pat_bindings(param, &mut names);
         }
@@ -1365,7 +1366,7 @@ impl VisitMut for DefaultInteropMemberRewriter<'_> {
     }
 
     fn visit_mut_block_stmt(&mut self, block: &mut BlockStmt) {
-        let mut names = HashSet::new();
+        let mut names = HashSet::default();
         collect_local_bindings_from_stmts(&block.stmts, &mut names);
         self.push_shadowed(names);
         block.visit_mut_children_with(self);
@@ -1399,7 +1400,7 @@ struct ReferenceGraph {
 }
 
 fn build_reference_graph(items: &[TopLevelItem]) -> ReferenceGraph {
-    let mut name_to_item: HashMap<Atom, usize> = HashMap::new();
+    let mut name_to_item: HashMap<Atom, usize> = HashMap::default();
     for (idx, item) in items.iter().enumerate() {
         for name in &item.declared_names {
             name_to_item.insert(name.clone(), idx);
@@ -1407,9 +1408,9 @@ fn build_reference_graph(items: &[TopLevelItem]) -> ReferenceGraph {
     }
 
     let n = items.len();
-    let mut references = vec![HashSet::new(); n];
-    let mut referenced_by = vec![HashSet::new(); n];
-    let mut writes = vec![HashSet::new(); n];
+    let mut references = vec![HashSet::default(); n];
+    let mut referenced_by = vec![HashSet::default(); n];
+    let mut writes = vec![HashSet::default(); n];
 
     for (idx, item) in items.iter().enumerate() {
         for ref_name in &item.referenced_names {
@@ -1548,7 +1549,7 @@ fn analyze_cross_item_writes(graph: &ReferenceGraph, uf: &UnionFind) -> CrossWri
     let item_count = graph.writes.len();
     let mut signal_uf = uf.clone();
     let signal_root_by_item: Vec<_> = (0..item_count).map(|item| signal_uf.find(item)).collect();
-    let mut writer_targets = vec![HashSet::new(); item_count];
+    let mut writer_targets = vec![HashSet::default(); item_count];
     let mut write_components = UnionFind::new(item_count);
 
     for (writer, targets) in graph.writes.iter().enumerate() {
@@ -1563,8 +1564,8 @@ fn analyze_cross_item_writes(graph: &ReferenceGraph, uf: &UnionFind) -> CrossWri
     }
 
     let signal_roots: HashSet<_> = signal_root_by_item.iter().copied().collect();
-    let mut component_counts = HashMap::new();
-    let mut component_minimums = HashMap::new();
+    let mut component_counts = HashMap::default();
+    let mut component_minimums = HashMap::default();
     for &signal_root in &signal_roots {
         let component = write_components.find(signal_root);
         *component_counts.entry(component).or_insert(0usize) += 1;
@@ -1598,7 +1599,7 @@ fn analyze_cross_item_writes(graph: &ReferenceGraph, uf: &UnionFind) -> CrossWri
     }
 
     let signal_roots: HashSet<_> = signal_root_by_item.iter().copied().collect();
-    let mut leaf_component_counts = HashMap::new();
+    let mut leaf_component_counts = HashMap::default();
     for &signal_root in &signal_roots {
         let component = leaf_components.find(signal_root);
         *leaf_component_counts.entry(component).or_insert(0usize) += 1;
@@ -1633,7 +1634,7 @@ fn retain_inspect_cross_write_edge(
 fn canonical_cluster_ids(uf: &UnionFind, item_count: usize) -> Vec<usize> {
     let mut uf = uf.clone();
     let roots: Vec<_> = (0..item_count).map(|item| uf.find(item)).collect();
-    let mut minimum_by_root = HashMap::new();
+    let mut minimum_by_root = HashMap::default();
     for (item, &root) in roots.iter().enumerate() {
         minimum_by_root
             .entry(root)
@@ -1676,7 +1677,7 @@ fn merge_bounded_cross_item_writes(
     let topology = analyze_cross_item_writes(graph, uf);
     let mut component_cap_uf = uf.clone();
     let mut leaf_candidate_uf = uf.clone();
-    let mut leaf_edges_by_component: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    let mut leaf_edges_by_component: HashMap<usize, Vec<(usize, usize)>> = HashMap::default();
 
     for (writer, targets) in graph.writes.iter().enumerate() {
         let writer_root = topology.signal_root_by_item[writer];
@@ -1711,7 +1712,7 @@ fn merge_bounded_cross_item_writes(
     };
 
     let mut selected_uf = component_cap_uf;
-    let mut restored_components = HashSet::new();
+    let mut restored_components = HashSet::default();
     let mut component_ids = leaf_edges_by_component.keys().copied().collect::<Vec<_>>();
     component_ids.sort_unstable();
     for component_id in component_ids {
@@ -1748,7 +1749,7 @@ fn inspection_output_cluster_count(items: &[TopLevelItem], uf: &UnionFind) -> us
 /// write-based partition sees multiple producers and can synthesize an
 /// immutable import beside a local redeclaration of the same binding.
 fn union_duplicate_var_declarations(items: &[TopLevelItem], uf: &mut UnionFind) {
-    let mut first_var_declaration = HashMap::<Atom, usize>::new();
+    let mut first_var_declaration = HashMap::<Atom, usize>::default();
     for (item_index, item) in items.iter().enumerate() {
         for name in &item.top_level_var_names {
             if let Some(&first_index) = first_var_declaration.get(name) {
@@ -1863,7 +1864,7 @@ fn apply_merge_signals(items: &[TopLevelItem], graph: &ReferenceGraph, uf: &mut 
         let cluster_members: Vec<usize> = (0..items.len())
             .filter(|&k| uf.find(k) == consumer_root)
             .collect();
-        let mut ref_targets: HashSet<usize> = HashSet::new();
+        let mut ref_targets: HashSet<usize> = HashSet::default();
         for k in &cluster_members {
             for &t in &graph.references[*k] {
                 let tr = uf.find(t);
@@ -1889,7 +1890,7 @@ struct Cluster {
 }
 
 fn extract_root_clusters(items: &[TopLevelItem], uf: &mut UnionFind) -> Vec<Cluster> {
-    let mut root_to_indices: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut root_to_indices: HashMap<usize, Vec<usize>> = HashMap::default();
     for i in 0..items.len() {
         root_to_indices.entry(uf.find(i)).or_default().push(i);
     }
@@ -2164,7 +2165,7 @@ fn move_bare_statements_into_entry(
     // entry ends up importing and redeclaring the same binding.
     union_duplicate_var_declarations(items, &mut write_groups);
     merge_cross_item_writes(graph, &mut write_groups);
-    let mut entry_write_roots = HashSet::new();
+    let mut entry_write_roots = HashSet::default();
     for (item_index, item) in items.iter().enumerate() {
         if item.declared_names.is_empty() && !item.is_module_decl {
             entry_write_roots.insert(write_groups.find(item_index));
@@ -2363,7 +2364,7 @@ fn build_cluster_graph(clusters: &[Cluster], graph: &ReferenceGraph) -> Vec<Hash
         }
     }
 
-    let mut cluster_graph = vec![HashSet::new(); clusters.len()];
+    let mut cluster_graph = vec![HashSet::default(); clusters.len()];
     for (cluster_index, cluster) in clusters.iter().enumerate() {
         for &item_index in &cluster.item_indices {
             for &target_item in &graph.references[item_index] {
@@ -2450,7 +2451,7 @@ fn build_cluster_symbol_links(
     cluster_declared: &[HashSet<Atom>],
     cluster_referenced: &[HashSet<Atom>],
 ) -> ClusterSymbolLinks {
-    let mut declaring_clusters: HashMap<Atom, Vec<usize>> = HashMap::new();
+    let mut declaring_clusters: HashMap<Atom, Vec<usize>> = HashMap::default();
     for (cluster_index, declared_names) in cluster_declared.iter().enumerate() {
         for name in declared_names {
             declaring_clusters
@@ -2461,9 +2462,9 @@ fn build_cluster_symbol_links(
     }
 
     let mut imports_by_consumer = (0..cluster_referenced.len())
-        .map(|_| HashMap::<usize, Vec<Atom>>::new())
+        .map(|_| HashMap::<usize, Vec<Atom>>::default())
         .collect::<Vec<_>>();
-    let mut exports_by_producer = vec![HashSet::new(); cluster_declared.len()];
+    let mut exports_by_producer = vec![HashSet::default(); cluster_declared.len()];
 
     for (consumer_index, referenced_names) in cluster_referenced.iter().enumerate() {
         for name in referenced_names {
@@ -2531,13 +2532,13 @@ fn emit_clusters(
             })
             .collect::<Vec<_>>()
     });
-    let mut context_cluster_counts = HashMap::new();
+    let mut context_cluster_counts = HashMap::default();
     if let Some(cluster_contexts) = &cluster_contexts {
         for context in cluster_contexts.iter().flatten() {
             *context_cluster_counts.entry(*context).or_insert(0usize) += 1;
         }
     }
-    let mut context_spans = HashMap::<usize, Vec<Span>>::new();
+    let mut context_spans = HashMap::<usize, Vec<Span>>::default();
     if let Some(context_by_item) = inspection_context_by_item {
         for (item, &context) in context_by_item.iter().enumerate() {
             if context_cluster_counts.get(&context).copied().unwrap_or(0) >= 2 {
@@ -2590,7 +2591,7 @@ fn emit_clusters(
                 return item_info.referenced_names.clone();
             }
             let mut emitted_item = source_item.clone();
-            let mut default_interop_bindings = HashSet::new();
+            let mut default_interop_bindings = HashSet::default();
             rewrite_emitted_runtime_helpers(
                 &mut emitted_item,
                 &item_info.declared_names,
@@ -2617,7 +2618,7 @@ fn emit_clusters(
     // Assign final filenames first so synthesized imports point at the same
     // paths the caller will write. Chunk names are derived from minified
     // bindings, so collisions are common in scope-concatenated packages.
-    let mut seen_filenames = HashSet::new();
+    let mut seen_filenames = HashSet::default();
     let filenames: Vec<String> = clusters
         .iter()
         .map(|c| {
@@ -2653,7 +2654,7 @@ fn emit_clusters(
         // Original body items, with exported declarations promoted to
         // `export function ...` / `export const ...` / `export class ...`.
         let mut leftover_exports: Vec<Atom> = Vec::new();
-        let mut default_interop_bindings = HashSet::new();
+        let mut default_interop_bindings = HashSet::default();
         for &i in &cluster.item_indices {
             let mut item = body[i].clone();
             rewrite_emitted_runtime_helpers(

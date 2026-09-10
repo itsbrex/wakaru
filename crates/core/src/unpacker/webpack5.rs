@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{
@@ -379,7 +379,7 @@ pub fn detect_and_extract_chunk(source: &str) -> Option<UnpackResult> {
 }
 
 pub(crate) fn detect_chunk_ids_from_module(module: &Module) -> HashSet<usize> {
-    let mut ids = HashSet::new();
+    let mut ids = HashSet::default();
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Expr(ExprStmt { expr, .. })) = item else {
             continue;
@@ -400,9 +400,9 @@ pub(super) fn detect_chunk_from_module_prepared(
     let _enter = span.enter();
     let mut all_modules = Vec::new();
     let mut all_prepared = Vec::new();
-    let mut all_failures = HashMap::new();
-    let mut all_numeric_module_ids = HashMap::new();
-    let mut all_legacy_module_i = HashSet::new();
+    let mut all_failures = HashMap::default();
+    let mut all_numeric_module_ids = HashMap::default();
+    let mut all_legacy_module_i = HashSet::default();
 
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Expr(ExprStmt { expr, .. })) = item else {
@@ -725,7 +725,7 @@ fn region_fn_candidates(stmts: &[Stmt]) -> Vec<RegionFnCandidate<'_>> {
                 let Some(body) = &fn_decl.function.body else {
                     continue;
                 };
-                let mut excluded: HashSet<Id> = HashSet::new();
+                let mut excluded: HashSet<Id> = HashSet::default();
                 for param in &fn_decl.function.params {
                     collect_pat_binding_ids(&param.pat, &mut excluded);
                 }
@@ -749,7 +749,7 @@ fn region_fn_candidates(stmts: &[Stmt]) -> Vec<RegionFnCandidate<'_>> {
                             let Some(body) = &fn_expr.function.body else {
                                 continue;
                             };
-                            let mut excluded: HashSet<Id> = HashSet::new();
+                            let mut excluded: HashSet<Id> = HashSet::default();
                             for param in &fn_expr.function.params {
                                 collect_pat_binding_ids(&param.pat, &mut excluded);
                             }
@@ -767,7 +767,7 @@ fn region_fn_candidates(stmts: &[Stmt]) -> Vec<RegionFnCandidate<'_>> {
                             let ArrowFunctionBody::FunctionBody(body) = &*arrow.body else {
                                 continue;
                             };
-                            let mut excluded: HashSet<Id> = HashSet::new();
+                            let mut excluded: HashSet<Id> = HashSet::default();
                             for pat in &arrow.params {
                                 collect_pat_binding_ids(pat, &mut excluded);
                             }
@@ -835,7 +835,7 @@ fn require_candidate_from_call(stmt_idx: usize, call: &CallExpr) -> Option<Regio
         return None;
     };
 
-    let mut excluded = HashSet::new();
+    let mut excluded = HashSet::default();
     let body = match strip_parens(callee) {
         Expr::Fn(fn_expr) => {
             for param in &fn_expr.function.params {
@@ -904,7 +904,7 @@ fn module_id_literal(expr: &Expr) -> Option<String> {
 /// into nested functions); assignment targets are checked against the body's
 /// own declared bindings.
 fn body_is_webpack_require(excluded: &HashSet<Id>, stmts: &[Stmt], table_id: &Id) -> bool {
-    let mut body_declared = HashSet::new();
+    let mut body_declared = HashSet::default();
     let mut collector = BodyVarCollector {
         ids: &mut body_declared,
     };
@@ -913,10 +913,10 @@ fn body_is_webpack_require(excluded: &HashSet<Id>, stmts: &[Stmt], table_id: &Id
         table_id,
         excluded,
         body_declared: &body_declared,
-        local_modules: HashMap::new(),
-        table_call_args: HashSet::new(),
-        returned_exports_objs: HashSet::new(),
-        factory_holders: HashMap::new(),
+        local_modules: HashMap::default(),
+        table_call_args: HashSet::default(),
+        returned_exports_objs: HashSet::default(),
+        factory_holders: HashMap::default(),
     };
     stmts.visit_with(&mut scanner);
     scanner.local_modules.iter().any(|(module, cache_index)| {
@@ -1424,7 +1424,7 @@ fn extract_commonjs_chunk_modules_from_assign(
 }
 
 fn extract_commonjs_chunk_ids(expr: &Expr) -> HashSet<usize> {
-    let mut ids = HashSet::new();
+    let mut ids = HashSet::default();
     match strip_parens(expr) {
         Expr::Assign(assign) => {
             collect_commonjs_chunk_ids_from_assign(assign, &mut ids);
@@ -1508,7 +1508,7 @@ fn prepare_webpack5_factories(
     let can_isolate_runtime_parameter_reuse = module_entries
         .iter()
         .all(|entry| entry.id.parse::<usize>().is_ok());
-    let mut opaque_filenames = HashSet::new();
+    let mut opaque_filenames = HashSet::default();
 
     loop {
         // Every round uses one immutable graph snapshot. Newly unsupported
@@ -1532,7 +1532,7 @@ fn prepare_webpack5_factories(
             .collect();
 
         let mut prepared = Vec::with_capacity(module_entries.len());
-        let mut newly_opaque = HashSet::new();
+        let mut newly_opaque = HashSet::default();
         for entry in module_entries {
             if opaque_filenames.contains(&entry.filename) {
                 prepared.push(None);
@@ -2479,7 +2479,7 @@ fn find_first_executed_startup(
     scan_from: usize,
     require_id: &Id,
 ) -> Option<(usize, Option<usize>)> {
-    let mut seen_runtime_paths = HashSet::new();
+    let mut seen_runtime_paths = HashSet::default();
     for (stmt_idx, stmt) in stmts.iter().enumerate().skip(scan_from) {
         if let Stmt::Expr(expr_stmt) = stmt {
             if let Expr::Seq(seq) = strip_parens(&expr_stmt.expr) {
@@ -2895,7 +2895,7 @@ fn is_webpack5_runtime_entry_body(body: &swc_core::ecma::ast::FunctionBody) -> b
 }
 
 fn has_runtime_property_assignments(body: &swc_core::ecma::ast::FunctionBody) -> bool {
-    let mut bits_by_object: HashMap<Atom, u8> = HashMap::new();
+    let mut bits_by_object: HashMap<Atom, u8> = HashMap::default();
     for stmt in &body.stmts {
         let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
             continue;

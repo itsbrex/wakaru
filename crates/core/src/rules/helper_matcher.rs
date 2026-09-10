@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::common::{Mark, DUMMY_SP};
 use swc_core::ecma::ast::{
@@ -74,7 +74,7 @@ pub(crate) fn remaining_refs_outside_var_declarators(
     let mut finder = VarDeclaratorSkippingRefFinder {
         targets,
         skipped_decls,
-        found: HashSet::new(),
+        found: HashSet::default(),
     };
     module.visit_with(&mut finder);
     finder.found
@@ -90,7 +90,7 @@ pub(crate) fn remaining_refs_outside_declarations(
     let mut finder = VarDeclaratorSkippingRefFinder {
         targets,
         skipped_decls,
-        found: HashSet::new(),
+        found: HashSet::default(),
     };
 
     for item in &module.body {
@@ -148,7 +148,7 @@ where
 {
     let mut finder = RemainingRefFinder {
         targets,
-        found: HashSet::new(),
+        found: HashSet::default(),
     };
     node.visit_with(&mut finder);
     finder.found
@@ -274,7 +274,7 @@ pub(crate) fn remove_import_specifiers_by_binding(
 }
 
 pub(crate) fn collect_import_binding_keys(module: &Module) -> HashSet<BindingKey> {
-    let mut keys = HashSet::new();
+    let mut keys = HashSet::default();
     for item in &module.body {
         let ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import)) = item else {
             continue;
@@ -310,11 +310,11 @@ impl NumericRequireNamespaces {
     pub(crate) fn collect(module: &Module, unresolved_mark: Option<Mark>) -> Self {
         let Some(unresolved_mark) = unresolved_mark else {
             return Self {
-                candidates: HashSet::new(),
-                referenced_at_entry: HashSet::new(),
+                candidates: HashSet::default(),
+                referenced_at_entry: HashSet::default(),
             };
         };
-        let mut candidates = HashSet::new();
+        let mut candidates = HashSet::default();
         for item in &module.body {
             let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
                 continue;
@@ -342,7 +342,7 @@ impl NumericRequireNamespaces {
 
     /// Remove candidate declarations orphaned by the calling rule's rewrites.
     pub(crate) fn sweep_orphaned(&self, body: &mut Vec<ModuleItem>) {
-        let mut unused = HashSet::new();
+        let mut unused = HashSet::default();
         for key in &self.referenced_at_entry {
             let ident = Ident::new(key.0.clone(), DUMMY_SP, key.1);
             if !ident_used_in_items(body, &ident) {

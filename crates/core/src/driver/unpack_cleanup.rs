@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::atoms::Atom;
 use swc_core::ecma::ast::{
@@ -8,7 +8,7 @@ use swc_core::ecma::ast::{
 use crate::unpacker::module_item_declared_binding_ids;
 
 pub(crate) fn prune_stale_local_named_exports(module: &mut Module) {
-    let exportable_names: std::collections::HashSet<_> = module
+    let exportable_names: crate::collections::HashSet<_> = module
         .body
         .iter()
         .flat_map(|item| {
@@ -44,7 +44,7 @@ pub(crate) fn prune_stale_local_named_exports(module: &mut Module) {
 }
 
 pub(crate) fn dedup_duplicate_exports(module: &mut Module) {
-    let mut exported_names = HashSet::new();
+    let mut exported_names = HashSet::default();
 
     module.body.retain_mut(|item| {
         let ModuleItem::ModuleDecl(decl) = item else {

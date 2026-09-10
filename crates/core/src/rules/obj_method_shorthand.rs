@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::ecma::ast::{
     AssignExpr, AssignTarget, BinaryOp, Expr, MethodProp, Module, ObjectLit, Prop, PropName,

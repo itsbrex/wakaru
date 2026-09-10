@@ -87,7 +87,7 @@ fn resolve_passthrough(
 ) -> Option<Atom> {
     let original_importer = current_filename?;
     let mut current = facts.resolve_key_from(current_filename, source)?;
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::collections::HashSet::default();
 
     loop {
         if !seen.insert(current.clone()) {

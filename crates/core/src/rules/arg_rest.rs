@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::atoms::Atom;
 use swc_core::common::DUMMY_SP;
@@ -708,7 +708,7 @@ fn fresh_rest_name<P: VisitWith<IdentNameCollector>>(
     copy: Option<BindingId>,
 ) -> Atom {
     let mut collector = IdentNameCollector {
-        names: HashSet::new(),
+        names: HashSet::default(),
         ignored_binding: copy,
     };
     body.visit_with(&mut collector);

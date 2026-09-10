@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Span, Spanned, DUMMY_SP};
@@ -138,13 +138,13 @@ impl AsyncHelperContext {
         Self {
             tslib_namespaces: local_helpers.tslib_namespaces().clone(),
             awaiter_helpers: local_helpers.ts_helpers_of_kind(TsHelperKind::Awaiter),
-            awaiter_namespaces: HashMap::new(),
+            awaiter_namespaces: HashMap::default(),
             generator_helpers: local_helpers.ts_helpers_of_kind(TsHelperKind::Generator),
-            generator_namespaces: HashMap::new(),
+            generator_namespaces: HashMap::default(),
             values_helpers: local_helpers.ts_helpers_of_kind(TsHelperKind::Values),
-            values_namespaces: HashMap::new(),
+            values_namespaces: HashMap::default(),
             unresolved_mark,
-            written_bindings: HashSet::new(),
+            written_bindings: HashSet::default(),
             with_statement_present: false,
         }
     }
@@ -425,7 +425,7 @@ fn extract_generator_stmts(stmt: Stmt, helpers: &AsyncHelperContext) -> Option<E
     let body = fn_expr.function.body?;
     let mut state_stmt = None;
     let mut callback_locals = Vec::new();
-    let mut callback_local_ids = HashSet::new();
+    let mut callback_local_ids = HashSet::default();
     for stmt in body.stmts {
         match stmt {
             Stmt::Switch(_) | Stmt::Return(_) => {
@@ -459,7 +459,7 @@ fn extract_generator_stmts(stmt: Stmt, helpers: &AsyncHelperContext) -> Option<E
 }
 
 fn binding_names_from_params(params: &[Param]) -> HashSet<Atom> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for param in params {
         collect_pat_names(&param.pat, &mut names);
     }
@@ -505,7 +505,7 @@ fn hygienically_move_callback_locals(
     reserved.extend(destination_identifier_names(
         moved_stmts,
         None,
-        &HashSet::new(),
+        &HashSet::default(),
     ));
     let renames: Vec<BindingRename> = colliding
         .into_iter()
@@ -1969,7 +1969,7 @@ fn try_transform_awaiter(
 /// declarations are collected directly. Nested callable and class scopes stay
 /// intact and are not part of the move.
 fn moved_function_scope_binding_ids(stmts: &[Stmt]) -> HashSet<BindingId> {
-    let mut ids = HashSet::new();
+    let mut ids = HashSet::default();
     for stmt in stmts {
         if let Stmt::Decl(decl) = stmt {
             collect_decl_binding_ids(decl, &mut ids);
@@ -2496,14 +2496,14 @@ fn collect_awaiter_param_hints(
     helpers: &AsyncHelperContext,
 ) -> HashMap<BindingId, Atom> {
     let Some(body) = &func.body else {
-        return HashMap::new();
+        return HashMap::default();
     };
     if !body
         .stmts
         .iter()
         .any(|stmt| is_awaiter_return(stmt, helpers))
     {
-        return HashMap::new();
+        return HashMap::default();
     }
 
     let param_ids: HashSet<BindingId> = func
@@ -2517,7 +2517,7 @@ fn collect_awaiter_param_hints(
         })
         .collect();
     if param_ids.is_empty() {
-        return HashMap::new();
+        return HashMap::default();
     }
 
     #[derive(Default)]
@@ -2544,7 +2544,7 @@ fn collect_awaiter_param_hints(
 
     let mut collector = Collector {
         param_ids,
-        targets: HashMap::new(),
+        targets: HashMap::default(),
     };
     body.visit_with(&mut collector);
 
@@ -2621,7 +2621,7 @@ fn apply_unused_param_hints(func: &mut Function, hints: HashMap<BindingId, Atom>
     }
 
     let mut collector = UseCollector {
-        uses: HashSet::new(),
+        uses: HashSet::default(),
     };
     for param in &func.params {
         collector.visit_pat(&param.pat);

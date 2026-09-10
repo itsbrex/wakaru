@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Span, Spanned, DUMMY_SP};
@@ -48,8 +48,8 @@ impl SmartInline {
         Self {
             level,
             unresolved_mark: None,
-            use_state_bindings: HashSet::new(),
-            exported_bindings: HashSet::new(),
+            use_state_bindings: HashSet::default(),
+            exported_bindings: HashSet::default(),
             initialized_binding_scopes: Vec::new(),
             module_has_dynamic_scope: false,
         }
@@ -59,8 +59,8 @@ impl SmartInline {
         Self {
             level,
             unresolved_mark: Some(unresolved_mark),
-            use_state_bindings: HashSet::new(),
-            exported_bindings: HashSet::new(),
+            use_state_bindings: HashSet::default(),
+            exported_bindings: HashSet::default(),
             initialized_binding_scopes: Vec::new(),
             module_has_dynamic_scope: false,
         }
@@ -141,7 +141,7 @@ impl VisitMut for SmartInline {
     }
 
     fn visit_mut_function(&mut self, function: &mut Function) {
-        let mut bindings = HashSet::new();
+        let mut bindings = HashSet::default();
         for param in &function.params {
             collect_pat_write_ids(&param.pat, &mut bindings);
         }
@@ -162,7 +162,7 @@ impl VisitMut for SmartInline {
     }
 
     fn visit_mut_arrow_expr(&mut self, arrow: &mut ArrowExpr) {
-        let mut bindings = HashSet::new();
+        let mut bindings = HashSet::default();
         for param in &arrow.params {
             collect_pat_write_ids(param, &mut bindings);
         }
@@ -181,7 +181,7 @@ impl VisitMut for SmartInline {
     }
 
     fn visit_mut_catch_clause(&mut self, catch: &mut CatchClause) {
-        let mut bindings = HashSet::new();
+        let mut bindings = HashSet::default();
         if let Some(param) = &catch.param {
             collect_pat_write_ids(param, &mut bindings);
         }
@@ -256,7 +256,7 @@ impl<'a> FunctionEntrySafetyCollector<'a> {
     fn new(targets: &'a HashSet<BindingKey>) -> Self {
         Self {
             targets,
-            unsafe_bindings: HashSet::new(),
+            unsafe_bindings: HashSet::default(),
             nested_depth: 0,
             dynamic_scope: false,
             arguments_observed: false,
@@ -314,7 +314,7 @@ impl Visit for FunctionEntrySafetyCollector<'_> {
     // via `visit_nested` while the computed key stays lexical.
 
     fn visit_assign_expr(&mut self, assign: &AssignExpr) {
-        let mut targets = HashSet::new();
+        let mut targets = HashSet::default();
         match &assign.left {
             AssignTarget::Simple(SimpleAssignTarget::Ident(binding)) => {
                 targets.insert((binding.id.sym.clone(), binding.id.ctxt));
@@ -361,7 +361,7 @@ impl Visit for FunctionEntrySafetyCollector<'_> {
 impl FunctionEntrySafetyCollector<'_> {
     fn record_for_head(&mut self, head: &swc_core::ecma::ast::ForHead) {
         if let swc_core::ecma::ast::ForHead::Pat(pattern) = head {
-            let mut targets = HashSet::new();
+            let mut targets = HashSet::default();
             collect_pat_write_ids(pattern, &mut targets);
             for key in targets {
                 self.record_nested_write(key);
@@ -400,7 +400,7 @@ fn count_module_ident_refs(body: &[ModuleItem]) -> HashMap<BindingKey, usize> {
     }
 
     let mut counter = Counter {
-        counts: HashMap::new(),
+        counts: HashMap::default(),
     };
     body.visit_with(&mut counter);
     counter.counts
@@ -596,7 +596,7 @@ struct GlobalUsageStats {
 fn inline_module_arrow_wrappers(module: &mut Module) {
     // Collect candidates: const X = () => identY at module level (Stmt items only).
     // Use (sym, ctxt) keys so inner-scope variables with the same name are NOT replaced.
-    let mut candidates: HashMap<BindingKey, Box<Expr>> = HashMap::new();
+    let mut candidates: HashMap<BindingKey, Box<Expr>> = HashMap::default();
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
             continue;
@@ -766,7 +766,7 @@ fn inline_temp_vars(
     // second naming analysis. The generated-name check is also readability
     // policy: meaningful names such as `snapshot` or `store` are recovered
     // signal an unminifier should keep.
-    let mut candidates: HashMap<BindingKey, TempCandidate> = HashMap::new();
+    let mut candidates: HashMap<BindingKey, TempCandidate> = HashMap::default();
 
     for (idx, stmt) in stmts.iter().enumerate() {
         if let Stmt::Decl(Decl::Var(var)) = stmt {
@@ -1263,7 +1263,7 @@ impl TempUsageAnalysis {
 
         let mut source_collector = SourceBindingCollector {
             source_bindings: &mut analysis.source_bindings,
-            seen_refs: HashSet::new(),
+            seen_refs: HashSet::default(),
             stmt_idx: 0,
         };
         for (idx, stmt) in stmts.iter().enumerate() {
@@ -1357,7 +1357,7 @@ impl Visit for SourceBindingCollector<'_> {
     fn visit_var_declarator(&mut self, decl: &VarDeclarator) {
         decl.init.visit_with(self);
 
-        let mut bindings = HashSet::new();
+        let mut bindings = HashSet::default();
         collect_pat_write_ids(&decl.name, &mut bindings);
         for key in bindings {
             let info = self.source_bindings.entry(key.clone()).or_default();
@@ -1444,7 +1444,7 @@ impl Visit for TempUsageCollector<'_> {
             }
             AssignTarget::Simple(SimpleAssignTarget::Member(_)) => {}
             AssignTarget::Pat(pat_target) => {
-                let mut targets = HashSet::new();
+                let mut targets = HashSet::default();
                 collect_assign_target_pat_ids(pat_target, &mut targets);
                 for key in targets {
                     self.record_direct_mutation(&key);
@@ -1472,7 +1472,7 @@ impl Visit for TempUsageCollector<'_> {
 
     fn visit_var_declarator(&mut self, declarator: &VarDeclarator) {
         if declarator.init.is_some() {
-            let mut bindings = HashSet::new();
+            let mut bindings = HashSet::default();
             collect_pat_write_ids(&declarator.name, &mut bindings);
             for key in bindings {
                 self.record_direct_mutation(&key);
@@ -1544,7 +1544,7 @@ impl TempUsageCollector<'_> {
 
     fn record_for_head_mutations(&mut self, head: &swc_core::ecma::ast::ForHead) {
         if let swc_core::ecma::ast::ForHead::Pat(pat) = head {
-            let mut targets = HashSet::new();
+            let mut targets = HashSet::default();
             collect_pat_write_ids(pat, &mut targets);
             for key in targets {
                 self.record_direct_mutation(&key);
@@ -1675,7 +1675,7 @@ impl Visit for NestedTempCollector<'_> {
     }
 
     fn visit_assign_expr(&mut self, assign: &AssignExpr) {
-        let mut targets = HashSet::new();
+        let mut targets = HashSet::default();
         match &assign.left {
             AssignTarget::Simple(SimpleAssignTarget::Ident(binding)) => {
                 targets.insert((binding.id.sym.clone(), binding.id.ctxt));
@@ -1698,7 +1698,7 @@ impl Visit for NestedTempCollector<'_> {
 
     fn visit_for_in_stmt(&mut self, stmt: &ForInStmt) {
         if let swc_core::ecma::ast::ForHead::Pat(pattern) = &stmt.left {
-            let mut targets = HashSet::new();
+            let mut targets = HashSet::default();
             collect_pat_write_ids(pattern, &mut targets);
             for key in targets {
                 self.record_source_write(&key);
@@ -1709,7 +1709,7 @@ impl Visit for NestedTempCollector<'_> {
 
     fn visit_for_of_stmt(&mut self, stmt: &ForOfStmt) {
         if let swc_core::ecma::ast::ForHead::Pat(pattern) = &stmt.left {
-            let mut targets = HashSet::new();
+            let mut targets = HashSet::default();
             collect_pat_write_ids(pattern, &mut targets);
             for key in targets {
                 self.record_source_write(&key);
@@ -1844,7 +1844,7 @@ fn collect_use_state_bindings(module: &Module) -> HashSet<BindingKey> {
     }
 
     let mut collector = UseStateBindingCollector {
-        bindings: HashSet::new(),
+        bindings: HashSet::default(),
     };
     module.visit_with(&mut collector);
     collector.bindings

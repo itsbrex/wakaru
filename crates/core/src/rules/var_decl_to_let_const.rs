@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::ecma::ast::{
@@ -82,7 +82,7 @@ impl VisitMut for VarDeclToLetConst {
         // Recurse into children first
         func.visit_mut_children_with(self);
 
-        let mut param_ids = HashSet::new();
+        let mut param_ids = HashSet::default();
         for param in &func.params {
             collect_binding_ids_from_pat(&param.pat, &mut param_ids);
         }
@@ -226,7 +226,7 @@ fn collect_exported_var_bindings_module(
     items: &[ModuleItem],
     var_ids: &HashSet<BindingId>,
 ) -> HashSet<BindingId> {
-    let mut exported = HashSet::new();
+    let mut exported = HashSet::default();
     for item in items {
         let ModuleItem::ModuleDecl(decl) = item else {
             continue;
@@ -300,7 +300,7 @@ impl Visit for ScopeDeclBindingCounter {
     fn visit_var_decl(&mut self, var: &VarDecl) {
         if var.kind == VarDeclKind::Var {
             for d in &var.decls {
-                let mut ids = HashSet::new();
+                let mut ids = HashSet::default();
                 collect_binding_ids_from_pat(&d.name, &mut ids);
                 for id in ids {
                     self.record(id);
@@ -372,7 +372,7 @@ impl Visit for AssignedIdsCollector {
 fn collect_block_escaping_vars_module(items: &[ModuleItem]) -> HashSet<BindingId> {
     let block_declared = collect_block_declared_var_ids_module(items);
     if block_declared.is_empty() {
-        return HashSet::new();
+        return HashSet::default();
     }
     collect_outside_decl_block_refs_module(items, &block_declared)
 }
@@ -380,7 +380,7 @@ fn collect_block_escaping_vars_module(items: &[ModuleItem]) -> HashSet<BindingId
 fn collect_block_escaping_vars_stmts(stmts: &[Stmt]) -> HashSet<BindingId> {
     let block_declared = collect_block_declared_var_ids_stmts(stmts);
     if block_declared.is_empty() {
-        return HashSet::new();
+        return HashSet::default();
     }
     collect_outside_decl_block_refs_stmts(stmts, &block_declared)
 }
@@ -416,7 +416,7 @@ impl Visit for BlockDeclaredVarCollector {
                 return;
             };
             for decl in &var.decls {
-                let mut ids = HashSet::new();
+                let mut ids = HashSet::default();
                 collect_binding_ids_from_pat(&decl.name, &mut ids);
                 for id in ids {
                     self.ids_by_block.insert(id, block_id);
@@ -513,7 +513,7 @@ impl<'a> RefOutsideDeclBlockCollector<'a> {
     fn new(decl_blocks: &'a HashMap<BindingId, usize>) -> Self {
         Self {
             decl_blocks,
-            refs_outside: HashSet::new(),
+            refs_outside: HashSet::default(),
             block_stack: Vec::new(),
             next_block_id: 0,
             nested_scope_depth: 0,
@@ -634,11 +634,11 @@ fn collect_use_before_decl_vars_module(
     var_ids: &HashSet<BindingId>,
 ) -> HashSet<BindingId> {
     if var_ids.is_empty() {
-        return HashSet::new();
+        return HashSet::default();
     }
 
-    let mut declared_so_far: HashSet<BindingId> = HashSet::new();
-    let mut must_stay: HashSet<BindingId> = HashSet::new();
+    let mut declared_so_far: HashSet<BindingId> = HashSet::default();
+    let mut must_stay: HashSet<BindingId> = HashSet::default();
     let function_refs = collect_hoisted_function_refs_module(items, var_ids);
     analyze_module_items_in_order(
         items,
@@ -656,11 +656,11 @@ fn collect_use_before_decl_vars_stmts(
     var_ids: &HashSet<BindingId>,
 ) -> HashSet<BindingId> {
     if var_ids.is_empty() {
-        return HashSet::new();
+        return HashSet::default();
     }
 
-    let mut declared_so_far: HashSet<BindingId> = HashSet::new();
-    let mut must_stay: HashSet<BindingId> = HashSet::new();
+    let mut declared_so_far: HashSet<BindingId> = HashSet::default();
+    let mut must_stay: HashSet<BindingId> = HashSet::default();
     let function_refs = collect_hoisted_function_refs_stmts(stmts, var_ids);
     analyze_stmts_in_order(
         stmts,
@@ -1045,7 +1045,7 @@ fn analyze_var_decl_in_order(
     for decl in &var.decls {
         if let Some(init) = &decl.init {
             mark_expr_refs_before_decl(init, var_ids, function_refs, declared_so_far, must_stay);
-            let mut current_decl_ids = HashSet::new();
+            let mut current_decl_ids = HashSet::default();
             collect_binding_ids_from_pat(&decl.name, &mut current_decl_ids);
             let mut function_like_refs = collect_refs_in_function_like_expr(init, var_ids);
             function_like_refs.retain(|id| !current_decl_ids.contains(id));
@@ -1058,7 +1058,7 @@ fn analyze_var_decl_in_order(
         }
         let mut default_refs = VarRefCollector {
             var_ids,
-            refs: HashSet::new(),
+            refs: HashSet::default(),
         };
         visit_pat_defaults(&decl.name, &mut default_refs);
         mark_refs_before_decl(default_refs.refs, declared_so_far, must_stay);
@@ -1076,7 +1076,7 @@ fn collect_hoisted_function_refs_module(
     items: &[ModuleItem],
     var_ids: &HashSet<BindingId>,
 ) -> HashMap<BindingId, HashSet<BindingId>> {
-    let mut refs = HashMap::new();
+    let mut refs = HashMap::default();
     for item in items {
         match item {
             ModuleItem::Stmt(Stmt::Decl(Decl::Fn(function))) => {
@@ -1106,7 +1106,7 @@ fn collect_hoisted_function_refs_stmts(
     stmts: &[Stmt],
     var_ids: &HashSet<BindingId>,
 ) -> HashMap<BindingId, HashSet<BindingId>> {
-    let mut refs = HashMap::new();
+    let mut refs = HashMap::default();
     for stmt in stmts {
         if let Stmt::Decl(Decl::Fn(function)) = stmt {
             refs.insert(
@@ -1124,7 +1124,7 @@ fn collect_called_hoisted_function_refs(
 ) -> HashSet<BindingId> {
     let mut collector = HoistedFunctionCallCollector {
         function_refs,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     expr.visit_with(&mut collector);
     collector.refs
@@ -1157,7 +1157,7 @@ fn mark_expr_refs_before_decl(
 fn collect_refs_in_expr(expr: &Expr, var_ids: &HashSet<BindingId>) -> HashSet<BindingId> {
     let mut collector = VarRefCollector {
         var_ids,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     expr.visit_with(&mut collector);
     collector.refs
@@ -1169,7 +1169,7 @@ fn collect_refs_in_class(
 ) -> HashSet<BindingId> {
     let mut collector = VarRefCollector {
         var_ids,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     class.visit_with(&mut collector);
     collector.refs
@@ -1184,7 +1184,7 @@ fn collect_refs_in_default_decl(
         DefaultDecl::Fn(function) => {
             collect_refs_in_function_and_nested_function_likes(&function.function, var_ids)
         }
-        DefaultDecl::TsInterfaceDecl(_) => HashSet::new(),
+        DefaultDecl::TsInterfaceDecl(_) => HashSet::default(),
     }
 }
 
@@ -1194,7 +1194,7 @@ fn collect_refs_in_function(
 ) -> HashSet<BindingId> {
     let mut collector = VarRefCollector {
         var_ids,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     if let Some(body) = &function.body {
         body.visit_with(&mut collector);
@@ -1208,7 +1208,7 @@ fn collect_nested_function_like_refs_in_function(
 ) -> HashSet<BindingId> {
     let mut collector = NestedFunctionLikeRefCollector {
         var_ids,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     if let Some(body) = &function.body {
         body.visit_with(&mut collector);
@@ -1236,13 +1236,13 @@ fn collect_refs_in_function_like_expr(
         Expr::Arrow(arrow) => {
             let mut collector = VarRefCollector {
                 var_ids,
-                refs: HashSet::new(),
+                refs: HashSet::default(),
             };
             arrow.body.visit_with(&mut collector);
             collector.refs
         }
         Expr::Paren(paren) => collect_refs_in_function_like_expr(&paren.expr, var_ids),
-        _ => HashSet::new(),
+        _ => HashSet::default(),
     }
 }
 
@@ -1258,14 +1258,14 @@ fn collect_refs_in_function_like_expr_and_nested_function_likes(
             let mut refs = {
                 let mut collector = VarRefCollector {
                     var_ids,
-                    refs: HashSet::new(),
+                    refs: HashSet::default(),
                 };
                 arrow.body.visit_with(&mut collector);
                 collector.refs
             };
             let mut nested = NestedFunctionLikeRefCollector {
                 var_ids,
-                refs: HashSet::new(),
+                refs: HashSet::default(),
             };
             arrow.body.visit_with(&mut nested);
             refs.extend(nested.refs);
@@ -1283,12 +1283,12 @@ fn collect_refs_in_nested_function_like_expr(
     var_ids: &HashSet<BindingId>,
 ) -> HashSet<BindingId> {
     if is_direct_function_like_expr(expr) {
-        return HashSet::new();
+        return HashSet::default();
     }
 
     let mut collector = NestedFunctionLikeRefCollector {
         var_ids,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     expr.visit_with(&mut collector);
     collector.refs
@@ -1305,7 +1305,7 @@ fn is_direct_function_like_expr(expr: &Expr) -> bool {
 fn collect_refs_in_for_head(head: &ForHead, var_ids: &HashSet<BindingId>) -> HashSet<BindingId> {
     let mut collector = VarRefCollector {
         var_ids,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     head.visit_with(&mut collector);
     collector.refs
@@ -1328,7 +1328,7 @@ fn visit_for_head_assignment_expressions(head: &ForHead, visitor: &mut AssignedI
 fn collect_refs_in_var_decl(var: &VarDecl, var_ids: &HashSet<BindingId>) -> HashSet<BindingId> {
     let mut collector = VarRefCollector {
         var_ids,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     for decl in &var.decls {
         if let Some(init) = &decl.init {
@@ -1343,7 +1343,7 @@ fn collect_nested_function_like_refs_in_var_decl(
     var: &VarDecl,
     var_ids: &HashSet<BindingId>,
 ) -> HashSet<BindingId> {
-    let mut refs = HashSet::new();
+    let mut refs = HashSet::default();
     for decl in &var.decls {
         if let Some(init) = &decl.init {
             refs.extend(collect_refs_in_nested_function_like_expr(init, var_ids));
@@ -1356,7 +1356,7 @@ fn collect_function_like_refs_in_var_decl(
     var: &VarDecl,
     var_ids: &HashSet<BindingId>,
 ) -> HashSet<BindingId> {
-    let mut refs = HashSet::new();
+    let mut refs = HashSet::default();
     for decl in &var.decls {
         if let Some(init) = &decl.init {
             refs.extend(collect_refs_in_function_like_expr(init, var_ids));
@@ -1368,7 +1368,7 @@ fn collect_function_like_refs_in_var_decl(
 fn collect_refs_in_stmt(stmt: &Stmt, var_ids: &HashSet<BindingId>) -> HashSet<BindingId> {
     let mut collector = VarRefCollector {
         var_ids,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     if let Stmt::Decl(Decl::Var(var)) = stmt {
         return collect_refs_in_var_decl(var, var_ids);
@@ -1391,7 +1391,7 @@ impl Visit for NestedFunctionLikeRefCollector<'_> {
     fn visit_arrow_expr(&mut self, arrow: &ArrowExpr) {
         let mut collector = VarRefCollector {
             var_ids: self.var_ids,
-            refs: HashSet::new(),
+            refs: HashSet::default(),
         };
         arrow.body.visit_with(&mut collector);
         self.refs.extend(collector.refs);
@@ -1693,7 +1693,7 @@ fn keep_global_observed_vars(
 ) {
     let mut observer = GlobalVarObserver {
         var_ids,
-        observed: HashSet::new(),
+        observed: HashSet::default(),
         function_depth: 0,
     };
     for item in items {
@@ -1913,7 +1913,7 @@ impl VisitMut for VarConverter<'_> {
         if self.in_block_context && !self.in_with_stmt {
             // Skip conversion if any declarator must remain as `var` due to block escape
             let any_must_stay = var.decls.iter().any(|d| {
-                let mut ids = HashSet::new();
+                let mut ids = HashSet::default();
                 collect_binding_ids_from_pat(&d.name, &mut ids);
                 ids.iter().any(|id| self.must_stay_var.contains(id))
             });
@@ -1992,7 +1992,7 @@ impl VisitMut for VarConverter<'_> {
         if let ForHead::VarDecl(var) = &mut stmt.left {
             if var.kind == VarDeclKind::Var {
                 let any_must_stay = var.decls.iter().any(|d| {
-                    let mut ids = HashSet::new();
+                    let mut ids = HashSet::default();
                     collect_binding_ids_from_pat(&d.name, &mut ids);
                     ids.iter().any(|id| self.must_stay_var.contains(id))
                 });
@@ -2012,7 +2012,7 @@ impl VisitMut for VarConverter<'_> {
         if let ForHead::VarDecl(var) = &mut stmt.left {
             if var.kind == VarDeclKind::Var {
                 let any_must_stay = var.decls.iter().any(|d| {
-                    let mut ids = HashSet::new();
+                    let mut ids = HashSet::default();
                     collect_binding_ids_from_pat(&d.name, &mut ids);
                     ids.iter().any(|id| self.must_stay_var.contains(id))
                 });
@@ -2081,7 +2081,7 @@ fn convert_for_iter_var_decl(var: &mut VarDecl, assigned: &HashSet<BindingId>) {
         return;
     }
     let any_assigned = var.decls.iter().any(|d| {
-        let mut ids = HashSet::new();
+        let mut ids = HashSet::default();
         collect_binding_ids_from_pat(&d.name, &mut ids);
         ids.iter().any(|id| assigned.contains(id))
     });
@@ -2111,7 +2111,7 @@ fn convert_single_var_decl(var: &mut VarDecl, assigned: &HashSet<BindingId>) {
 
     // Check if any bound binding ID is in the assigned set
     let any_assigned = var.decls.iter().any(|d| {
-        let mut ids = HashSet::new();
+        let mut ids = HashSet::default();
         collect_binding_ids_from_pat(&d.name, &mut ids);
         ids.iter().any(|id| assigned.contains(id))
     });
@@ -2162,5 +2162,5 @@ fn pat_has_duplicate_bindings(pat: &Pat) -> bool {
         }
     }
 
-    visit_pat(pat, &mut HashSet::new())
+    visit_pat(pat, &mut HashSet::default())
 }

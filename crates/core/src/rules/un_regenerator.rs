@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Span, Spanned, DUMMY_SP};
@@ -315,7 +315,7 @@ fn module_exports_helper(
 fn collect_regenerator_runtime_helpers(
     module: &Module,
 ) -> HashMap<BindingKey, TranspilerHelperKind> {
-    let mut helpers = HashMap::new();
+    let mut helpers = HashMap::default();
     for item in &module.body {
         match item {
             ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl)))
@@ -1018,7 +1018,7 @@ impl VisitMut for FunctionTransformer<'_> {
 
 /// Returns the consumed mark binding key (sym + ctxt) on success.
 fn try_transform_regenerator_wrap(body: &mut FunctionBody) -> Option<Option<BindingKey>> {
-    try_transform_regenerator_wrap_with_reserved(body, &HashSet::new())
+    try_transform_regenerator_wrap_with_reserved(body, &HashSet::default())
 }
 
 fn try_transform_regenerator_wrap_with_reserved(
@@ -1050,7 +1050,7 @@ fn try_transform_regenerator_wrap_with_reserved(
         outer_names.insert(mark_key.0.clone());
     }
 
-    let mut local_names = HashSet::new();
+    let mut local_names = HashSet::default();
     for stmt in &hoisted_locals {
         let Stmt::Decl(Decl::Var(var)) = stmt else {
             unreachable!("state-machine locals are restricted to var declarations")
@@ -1242,7 +1242,7 @@ fn is_state_temp_slot_name(name: &Atom) -> bool {
 }
 
 fn binding_names_from_params(params: &[Param]) -> HashSet<Atom> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for param in params {
         collect_pat_names(&param.pat, &mut names);
     }
@@ -1909,7 +1909,7 @@ fn decode_babel_state_machine(
     let mut catch_bindings = CatchBindings::for_cases(&cases, &folded_aliases);
     // Collect (label_idx, stmt) pairs
     let mut flat: Vec<(usize, Stmt)> = Vec::new();
-    let mut skip_delegate_result_assignments: HashSet<(usize, usize)> = HashSet::new();
+    let mut skip_delegate_result_assignments: HashSet<(usize, usize)> = HashSet::default();
 
     for case in &cases {
         let idx = match case_label_index(case) {
@@ -3660,7 +3660,7 @@ fn anonymous_async_fn_expr(mut fn_expr: FnExpr) -> Expr {
 
 fn collect_binding_ref_counts(module: &Module) -> HashMap<BindingKey, usize> {
     let mut counter = BindingRefCounter {
-        counts: HashMap::new(),
+        counts: HashMap::default(),
     };
     module.visit_with(&mut counter);
     counter.counts
@@ -4390,7 +4390,11 @@ fn extract_async_to_gen_body(
             // Non-generator function that contains regeneratorRuntime.wrap
             let mut body = fn_expr.function.body?;
             if try_transform_regenerator_wrap(&mut body).is_some()
-                || try_transform_ts_generator_body(&mut body, generator_helpers, &HashSet::new())
+                || try_transform_ts_generator_body(
+                    &mut body,
+                    generator_helpers,
+                    &HashSet::default(),
+                )
             {
                 return Some(body.stmts);
             }
@@ -4414,7 +4418,11 @@ fn extract_async_to_gen_body(
             };
             let mut body = fn_expr.function.body?;
             if try_transform_regenerator_wrap(&mut body).is_some()
-                || try_transform_ts_generator_body(&mut body, generator_helpers, &HashSet::new())
+                || try_transform_ts_generator_body(
+                    &mut body,
+                    generator_helpers,
+                    &HashSet::default(),
+                )
             {
                 return Some(body.stmts);
             }

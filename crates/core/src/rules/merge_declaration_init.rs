@@ -46,7 +46,7 @@
 //! Matching is by [`BindingId`] (name + `SyntaxContext`), so same-named bindings
 //! in different scopes are never conflated.
 
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
@@ -69,7 +69,7 @@ impl MergeDeclarationInit {
     pub fn new(level: RewriteLevel) -> Self {
         Self {
             level,
-            merged_let_bindings: HashSet::new(),
+            merged_let_bindings: HashSet::default(),
         }
     }
 }

@@ -1,6 +1,6 @@
+use crate::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, SyntaxContext};
@@ -46,7 +46,7 @@ pub(crate) fn collect_jsx_tag_bindings(module: &Module) -> HashSet<BindingId> {
         }
     }
     let mut collector = TagCollector {
-        bindings: HashSet::new(),
+        bindings: HashSet::default(),
     };
     module.visit_with(&mut collector);
     collector.bindings
@@ -88,7 +88,7 @@ pub(crate) fn collect_unresolved_reference_names(
 
     let mut collector = Collector {
         unresolved_mark,
-        names: HashSet::new(),
+        names: HashSet::default(),
     };
     module.visit_with(&mut collector);
     collector.names
@@ -148,7 +148,7 @@ pub(crate) fn collect_free_reference_names(
 
     let mut collector = Collector {
         unresolved_mark,
-        names: HashSet::new(),
+        names: HashSet::default(),
     };
     module.visit_with(&mut collector);
     collector.names
@@ -170,7 +170,7 @@ pub(crate) fn collect_exported_binding_ids(module: &Module) -> HashSet<BindingId
 }
 
 pub(crate) fn collect_exported_binding_ids_from_items(items: &[ModuleItem]) -> HashSet<BindingId> {
-    let mut bindings = HashSet::new();
+    let mut bindings = HashSet::default();
 
     for item in items {
         if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = item {
@@ -240,7 +240,7 @@ impl RenameShadowIndex {
             fn push_scope(&mut self, declared_names: HashSet<Atom>) {
                 self.scope_stack.push(ScopeFrame {
                     declared_names,
-                    referenced_bindings: HashSet::new(),
+                    referenced_bindings: HashSet::default(),
                 });
             }
 
@@ -263,7 +263,7 @@ impl RenameShadowIndex {
             }
 
             fn collect_param_names(params: &[swc_core::ecma::ast::Param]) -> HashSet<Atom> {
-                let mut names = HashSet::new();
+                let mut names = HashSet::default();
                 for param in params {
                     collect_pat_names(&param.pat, &mut names);
                 }
@@ -271,7 +271,7 @@ impl RenameShadowIndex {
             }
 
             fn collect_arrow_param_names(params: &[Pat]) -> HashSet<Atom> {
-                let mut names = HashSet::new();
+                let mut names = HashSet::default();
                 for param in params {
                     collect_pat_names(param, &mut names);
                 }
@@ -333,13 +333,13 @@ impl RenameShadowIndex {
             }
 
             fn visit_block_stmt(&mut self, block: &BlockStmt) {
-                self.push_scope(HashSet::new());
+                self.push_scope(HashSet::default());
                 block.visit_children_with(self);
                 self.pop_scope();
             }
 
             fn visit_catch_clause(&mut self, catch: &CatchClause) {
-                let mut declared_names = HashSet::new();
+                let mut declared_names = HashSet::default();
                 if let Some(param) = &catch.param {
                     collect_pat_names(param, &mut declared_names);
                 }
@@ -370,7 +370,7 @@ impl RenameShadowIndex {
             scope_stack: Vec::new(),
             index: Self {
                 indexed_bindings: bindings.clone(),
-                forbidden_names_by_binding: HashMap::new(),
+                forbidden_names_by_binding: HashMap::default(),
             },
         };
         module.visit_with(&mut builder);
@@ -465,7 +465,7 @@ pub(crate) fn module_declares_binding_named(module: &Module, name: &str) -> bool
 }
 
 pub fn collect_module_names(module: &Module) -> HashSet<Atom> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for item in &module.body {
         match item {
             ModuleItem::ModuleDecl(ModuleDecl::Import(import)) => {
@@ -541,7 +541,7 @@ pub fn collect_module_names(module: &Module) -> HashSet<Atom> {
 }
 
 pub fn collect_top_level_binding_infos(module: &Module) -> HashMap<Atom, TopLevelBindingInfo> {
-    let mut infos = HashMap::new();
+    let mut infos = HashMap::default();
 
     for (item_index, item) in module.body.iter().enumerate() {
         match item {
@@ -931,7 +931,7 @@ pub(crate) struct BindingRenamer {
 
 impl BindingRenamer {
     pub fn new(renames: &[BindingRename]) -> Self {
-        let mut rename_map = HashMap::new();
+        let mut rename_map = HashMap::default();
         for rename in renames {
             rename_map
                 .entry(rename.old.clone())
@@ -1216,7 +1216,7 @@ use(globalName);
             "var target = 1; function wrapper() { var inner = 2; return target + inner; }",
             |module| {
                 let target = top_level_binding(module, "target");
-                let bindings = HashSet::from([target.clone()]);
+                let bindings = HashSet::from_iter([target.clone()]);
                 let index = RenameShadowIndex::for_bindings(module, &bindings);
                 assert!(index.rename_causes_shadowing(&target, &Atom::from("inner")));
                 assert!(!index.rename_causes_shadowing(&target, &Atom::from("other")));
@@ -1228,7 +1228,7 @@ use(globalName);
     fn indexed_binding_without_nested_conflicts_reports_no_shadowing() {
         with_parsed_module("var lonely = 1; use(lonely);", |module| {
             let lonely = top_level_binding(module, "lonely");
-            let bindings = HashSet::from([lonely.clone()]);
+            let bindings = HashSet::from_iter([lonely.clone()]);
             let index = RenameShadowIndex::for_bindings(module, &bindings);
             assert!(!index.rename_causes_shadowing(&lonely, &Atom::from("anything")));
         });
@@ -1240,7 +1240,7 @@ use(globalName);
     fn unindexed_binding_query_is_rejected() {
         with_parsed_module("var known = 1;", |module| {
             let known = top_level_binding(module, "known");
-            let bindings = HashSet::from([known]);
+            let bindings = HashSet::from_iter([known]);
             let index = RenameShadowIndex::for_bindings(module, &bindings);
             let stranger = (Atom::from("stranger"), SyntaxContext::empty());
             index.rename_causes_shadowing(&stranger, &Atom::from("x"));
@@ -1252,7 +1252,7 @@ use(globalName);
     fn unindexed_binding_query_fails_closed() {
         with_parsed_module("var known = 1;", |module| {
             let known = top_level_binding(module, "known");
-            let bindings = HashSet::from([known]);
+            let bindings = HashSet::from_iter([known]);
             let index = RenameShadowIndex::for_bindings(module, &bindings);
             let stranger = (Atom::from("stranger"), SyntaxContext::empty());
             assert!(index.rename_causes_shadowing(&stranger, &Atom::from("x")));

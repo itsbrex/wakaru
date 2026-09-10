@@ -6,7 +6,7 @@
 //! id is non-zero. The matchers live here so neither version's unpacker owns
 //! the other's syntax.
 
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, SyntaxContext, DUMMY_SP};
@@ -86,7 +86,7 @@ pub(super) fn webpack_module_filename(module_id: &str) -> String {
 pub(super) fn unique_webpack_module_filenames<'a>(
     module_ids: impl IntoIterator<Item = &'a str>,
 ) -> Vec<String> {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     module_ids
         .into_iter()
         .map(|module_id| {
@@ -1694,13 +1694,13 @@ mod tests {
 
     #[test]
     fn runtime_names_use_delimited_suffixes() {
-        let mut runtime_names = HashSet::from([Atom::from("_value")]);
+        let mut runtime_names = HashSet::from_iter([Atom::from("_value")]);
         assert_eq!(
             fresh_runtime_value_name(&Atom::from("value"), &mut runtime_names),
             "_value_2"
         );
 
-        let mut dependency_names = HashSet::from([Atom::from("_dependency")]);
+        let mut dependency_names = HashSet::from_iter([Atom::from("_dependency")]);
         assert_eq!(
             fresh_dependency_name(&mut dependency_names),
             "_dependency_2"

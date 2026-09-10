@@ -1,5 +1,5 @@
+use crate::collections::{HashMap, HashSet};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use swc_core::atoms::Atom;
@@ -36,8 +36,8 @@ impl SmartRename {
     pub fn new(unresolved_mark: Mark) -> Self {
         Self {
             unresolved_mark,
-            pending_value_position_names: HashMap::new(),
-            extracted_function_names: Rc::new(RefCell::new(HashMap::new())),
+            pending_value_position_names: HashMap::default(),
+            extracted_function_names: Rc::new(RefCell::new(HashMap::default())),
         }
     }
 }
@@ -114,7 +114,7 @@ impl SmartRenameSecondPass {
     ) -> Self {
         Self {
             unresolved_mark,
-            pending_value_position_names: HashMap::new(),
+            pending_value_position_names: HashMap::default(),
             extracted_function_names,
         }
     }
@@ -722,7 +722,7 @@ fn destructuring_rename_arrow(arrow: &mut ArrowExpr) {
     let mut all_names = match arrow.body.as_ref() {
         ArrowFunctionBody::FunctionBody(b) => collect_names_in_stmts(&b.stmts),
         ArrowFunctionBody::Expr(e) => {
-            let mut names = HashSet::new();
+            let mut names = HashSet::default();
             collect_names_in_expr(e, &mut names);
             names
         }
@@ -1514,7 +1514,7 @@ fn collect_value_position_renames_module(module: &Module) -> Vec<BindingRename> 
     // Group candidates by target name. If two bindings map to the same
     // target (e.g. five React type constants all assigned to `$$typeof:`),
     // the key isn't discriminative — drop the whole group.
-    let mut by_target: HashMap<String, Vec<BindingId>> = HashMap::new();
+    let mut by_target: HashMap<String, Vec<BindingId>> = HashMap::default();
     for (bid, state) in classifier.states {
         let Some(target) = state.single_target() else {
             continue;
@@ -1561,7 +1561,7 @@ fn collect_value_position_renames_module(module: &Module) -> Vec<BindingRename> 
     // Two-pass assignment: first reserve direct (unsuffixed) target names so
     // a later suffix fallback never steals another binding's natural target.
     let mut renames: Vec<BindingRename> = Vec::new();
-    let mut committed_names: HashSet<Atom> = HashSet::new();
+    let mut committed_names: HashSet<Atom> = HashSet::default();
     let mut needs_suffix: Vec<(String, BindingId)> = Vec::new();
 
     for (target, bid) in candidates {
@@ -1635,9 +1635,9 @@ impl BindingScopeNameIndex {
             fn new(function_scope: bool) -> Self {
                 Self {
                     function_scope,
-                    candidate_bindings: HashSet::new(),
-                    declared_bindings: HashSet::new(),
-                    references: HashSet::new(),
+                    candidate_bindings: HashSet::default(),
+                    declared_bindings: HashSet::default(),
+                    references: HashSet::default(),
                 }
             }
         }
@@ -2871,7 +2871,7 @@ fn jsx_component_alias_rename_module(module: &mut Module, exported_bindings: &Ha
             !exported_bindings.contains(bid) && state.other_uses == 0 && state.jsx_uses > 0
         })
         .collect();
-    let mut target_counts = HashMap::new();
+    let mut target_counts = HashMap::default();
     for (_, state) in &eligible {
         *target_counts.entry(state.target.clone()).or_insert(0usize) += 1;
     }
@@ -3140,7 +3140,7 @@ mod tests {
 
     #[test]
     fn find_non_conflicting_name_uses_next_available_suffix() {
-        let used_names = HashSet::from([
+        let used_names = HashSet::from_iter([
             Atom::from("rest"),
             Atom::from("rest_1"),
             Atom::from("rest_2"),

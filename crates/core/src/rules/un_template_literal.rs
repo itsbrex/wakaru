@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
@@ -82,9 +82,9 @@ impl<'a> UnTemplateLiteral<'a> {
             factories: &factories,
             cross_module_helpers: &cross_module_helpers,
             local_helpers,
-            consumed_helpers: HashSet::new(),
-            consumed_caches: HashSet::new(),
-            consumed_factories: HashSet::new(),
+            consumed_helpers: HashSet::default(),
+            consumed_caches: HashSet::default(),
+            consumed_factories: HashSet::default(),
         };
         module.visit_mut_children_with(&mut replacer);
         module.visit_mut_children_with(self);
@@ -687,7 +687,7 @@ fn extract_template_from_factory_body(
     cross_module_helpers: &CrossModuleHelperRefs,
     local_helpers: &LocalHelperContext,
 ) -> Option<TemplateData> {
-    let mut locals: HashMap<BindingKey, TemplateData> = HashMap::new();
+    let mut locals: HashMap<BindingKey, TemplateData> = HashMap::default();
 
     for stmt in stmts {
         match stmt {

@@ -65,6 +65,13 @@ allocating and freeing AST nodes across worker threads. This choice lives in
 install an allocator for their callers. Building the CLI requires a native
 C/C++ toolchain for the allocator dependency; see [Testing](testing.md).
 
+Internal hash tables use `crate::collections::{HashMap, HashSet}`, which are
+the standard-library types with `FxHasher`. Binding identities, atoms, and
+spans already hash to a precomputed word, so the keyed SipHash rounds were pure
+overhead on the hottest lookups. Use `HashMap::default()` (there is no `new()`
+for a non-default hasher) and keep the standard types only on public functions
+that callers outside the crate populate.
+
 ### Bun single-file executable containers (`crates/wakaru/src/bun.rs`)
 
 Bun single-file PE, Mach-O, and ELF executables contain a serialized module

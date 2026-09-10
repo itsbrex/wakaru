@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use anyhow::Result;
 use swc_core::atoms::Atom;
@@ -635,7 +635,7 @@ pub(super) fn list_item_context(
         .values
         .iter()
         .filter_map(|(binding, value)| {
-            let mut refs = HashSet::new();
+            let mut refs = HashSet::default();
             super::collect_js_unshadowed_read_refs(&value.value, &mut refs);
             refs.iter()
                 .any(|name| params.shadows(name))

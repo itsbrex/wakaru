@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, SyntaxContext, DUMMY_SP};
@@ -63,8 +63,8 @@ impl SimplifySequence {
             unresolved_mark,
             level,
             source_import_reads_are_observable,
-            observable_ident_reads: HashSet::new(),
-            nested_observable_ident_reads: HashSet::new(),
+            observable_ident_reads: HashSet::default(),
+            nested_observable_ident_reads: HashSet::default(),
             lexical_scopes: Vec::new(),
             function_lexical_scope_depths: Vec::new(),
         }
@@ -395,7 +395,7 @@ impl Visit for ObservableIdentReadDetector<'_> {
 }
 
 fn collect_import_binding_ids_from_module_items(items: &[ModuleItem]) -> HashSet<BindingId> {
-    let mut ids = HashSet::new();
+    let mut ids = HashSet::default();
     for item in items {
         let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
             continue;
@@ -421,7 +421,7 @@ fn collect_cjs_require_binding_ids_from_module_items(
     items: &[ModuleItem],
     unresolved_mark: Mark,
 ) -> HashSet<BindingId> {
-    let mut ids = HashSet::new();
+    let mut ids = HashSet::default();
     for item in items {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
             continue;
@@ -459,7 +459,7 @@ fn is_cjs_require_init(expr: &Expr, unresolved_mark: Mark) -> bool {
 }
 
 fn collect_lexical_decl_ids_from_module_items(items: &[ModuleItem]) -> HashSet<BindingId> {
-    let mut ids = HashSet::new();
+    let mut ids = HashSet::default();
     for item in items {
         match item {
             ModuleItem::Stmt(stmt) => collect_lexical_decl_ids_from_stmt_into(stmt, &mut ids),
@@ -472,7 +472,7 @@ fn collect_lexical_decl_ids_from_module_items(items: &[ModuleItem]) -> HashSet<B
 }
 
 fn collect_lexical_decl_ids_from_stmts(stmts: &[Stmt]) -> HashSet<BindingId> {
-    let mut ids = HashSet::new();
+    let mut ids = HashSet::default();
     for stmt in stmts {
         collect_lexical_decl_ids_from_stmt_into(stmt, &mut ids);
     }
@@ -480,7 +480,7 @@ fn collect_lexical_decl_ids_from_stmts(stmts: &[Stmt]) -> HashSet<BindingId> {
 }
 
 fn collect_lexical_decl_ids_from_module_decl(decl: &ModuleDecl) -> HashSet<BindingId> {
-    let mut ids = HashSet::new();
+    let mut ids = HashSet::default();
     collect_lexical_decl_ids_from_module_decl_into(decl, &mut ids);
     ids
 }
@@ -492,7 +492,7 @@ fn collect_lexical_decl_ids_from_module_decl_into(decl: &ModuleDecl, ids: &mut H
 }
 
 fn collect_lexical_decl_ids_from_stmt(stmt: &Stmt) -> HashSet<BindingId> {
-    let mut ids = HashSet::new();
+    let mut ids = HashSet::default();
     collect_lexical_decl_ids_from_stmt_into(stmt, &mut ids);
     ids
 }
@@ -975,7 +975,7 @@ fn extract_var_decl_prefix(
     let is_var = kind == VarDeclKind::Var;
     let mut prefix = Vec::new();
     let mut new_decls = Vec::new();
-    let mut header_bindings = HashSet::new();
+    let mut header_bindings = HashSet::default();
     if !is_var {
         for decl in &var.decls {
             collect_binding_ids_from_pat(&decl.name, &mut header_bindings);
@@ -986,7 +986,7 @@ fn extract_var_decl_prefix(
 
     for decl in var.decls {
         if !is_var {
-            let mut current_bindings = HashSet::new();
+            let mut current_bindings = HashSet::default();
             collect_binding_ids_from_pat(&decl.name, &mut current_bindings);
             for (sym, _) in current_bindings {
                 future_header_names.remove(&sym);

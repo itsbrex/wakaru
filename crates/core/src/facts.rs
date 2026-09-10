@@ -10,10 +10,8 @@
 //! These facts are the foundation for cross-module analysis in the multi-module
 //! `unpack()` path. Single-file `decompile()` does not use them.
 
-use std::{
-    collections::{HashMap, HashSet},
-    fmt,
-};
+use crate::collections::{HashMap, HashSet};
+use std::fmt;
 
 use swc_core::atoms::Atom;
 use swc_core::common::Mark;
@@ -212,7 +210,7 @@ pub struct ModuleFacts {
 /// Canonical form: no leading `./`, preserves the rest (e.g. `"lib/foo.js"`).
 #[derive(Debug, Clone, Default)]
 pub struct ModuleFactsMap {
-    inner: std::collections::HashMap<String, ModuleFacts>,
+    inner: crate::collections::HashMap<String, ModuleFacts>,
 }
 
 impl ModuleFactsMap {
@@ -761,8 +759,8 @@ fn collect_ts_helper_namespace_factory_exports(module: &Module) -> Vec<Atom> {
 }
 
 fn body_returns_cjs_namespace(stmts: &[Stmt]) -> bool {
-    let mut namespace_objects = HashSet::new();
-    let mut declared_bindings = HashSet::new();
+    let mut namespace_objects = HashSet::default();
+    let mut declared_bindings = HashSet::default();
     for stmt in stmts {
         let Stmt::Decl(Decl::Var(var)) = stmt else {
             continue;
@@ -779,7 +777,7 @@ fn body_returns_cjs_namespace(stmts: &[Stmt]) -> bool {
         }
     }
 
-    let mut module_objects = HashSet::new();
+    let mut module_objects = HashSet::default();
     for stmt in stmts {
         let Stmt::Decl(Decl::Var(var)) = stmt else {
             continue;
@@ -1069,7 +1067,7 @@ pub fn collect_commonjs_default_object(
     unresolved_mark: Mark,
 ) -> Option<CommonJsDefaultObjectFact> {
     let uses = BindingUseIndex::collect(module);
-    let mut object_bindings: HashMap<_, &ObjectLit> = HashMap::new();
+    let mut object_bindings: HashMap<_, &ObjectLit> = HashMap::default();
 
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
@@ -1109,7 +1107,7 @@ pub fn collect_commonjs_default_object(
     };
     let object = object?;
 
-    let mut properties = HashSet::new();
+    let mut properties = HashSet::default();
     for prop in &object.props {
         let PropOrSpread::Prop(prop) = prop else {
             continue;
@@ -1566,7 +1564,7 @@ fn static_object_property_name(prop: &Prop) -> Option<Atom> {
 
 fn collect_default_object_helper_exports(module: &Module) -> Vec<HelperExportFact> {
     let local_helpers = collect_transpiler_helpers(module);
-    let local_kinds: std::collections::HashMap<Atom, HelperKind> = local_helpers
+    let local_kinds: crate::collections::HashMap<Atom, HelperKind> = local_helpers
         .iter()
         .filter_map(|((local, _), kind)| {
             helper_kind_from_transpiler(*kind).map(|kind| (local.clone(), kind))

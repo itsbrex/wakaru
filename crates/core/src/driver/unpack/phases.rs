@@ -296,13 +296,13 @@ pub(super) fn unpack_multi_module_with_plan(
         .iter()
         .filter(|module| module.reserved_public_path)
         .map(|module| module.module.filename.clone())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<crate::collections::HashSet<_>>();
 
     // Stash per-module provenance (byte ranges into the original input)
     // keyed by provisional filename. Final provenance is built after dead
     // module elimination and filename recovery, so only surviving modules
     // appear with their final names.
-    let provenance_by_provisional: std::collections::HashMap<
+    let provenance_by_provisional: crate::collections::HashMap<
         String,
         (
             Option<PreparedInputId>,
@@ -578,7 +578,7 @@ pub(super) fn unpack_multi_module_with_plan(
     let rename_map = if recover_filenames {
         build_rename_map(&rename_entries, &reserved_public_paths)
     } else {
-        std::collections::HashMap::new()
+        crate::collections::HashMap::default()
     };
 
     // Phase 2: output pipeline with late pass. Each module is parsed from
@@ -903,8 +903,8 @@ pub(super) fn unpack_multi_module_with_plan(
     };
 
     // Separate source maps from the tuples before dead-module elimination.
-    let mut srcmap_by_filename: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    let mut srcmap_by_filename: crate::collections::HashMap<String, String> =
+        crate::collections::HashMap::default();
     let triples_for_dead: Vec<(String, String, Vec<UnpackWarning>, Option<ImportReport>)> = triples
         .into_iter()
         .map(|(filename, code, warns, report, srcmap)| {
@@ -933,7 +933,7 @@ pub(super) fn unpack_multi_module_with_plan(
     // Build final provenance from the surviving output modules, mapping
     // provisional filenames to their recovered names.  Dead helper modules
     // that were eliminated above are excluded.
-    let reverse_rename: std::collections::HashMap<&str, &str> = rename_ref
+    let reverse_rename: crate::collections::HashMap<&str, &str> = rename_ref
         .iter()
         .map(|(prov, renamed)| (renamed.as_str(), prov.as_str()))
         .collect();

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::collections::HashMap;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Spanned, DUMMY_SP};
@@ -3422,7 +3422,7 @@ fn rewrite_inline_arguments_defaults(
         body_bindings,
         param_name_candidates,
         consumed_param_name_bindings: Vec::new(),
-        placeholder_idents: HashMap::new(),
+        placeholder_idents: HashMap::default(),
     };
     body.visit_mut_with(&mut rewriter);
     remove_consumed_empty_param_name_decls(body, &rewriter.consumed_param_name_bindings);

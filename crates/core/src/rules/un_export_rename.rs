@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, DUMMY_SP};
@@ -105,7 +105,7 @@ fn collect_export_shadow_bindings(
     module: &Module,
     binding_infos: &HashMap<Atom, TopLevelBindingInfo>,
 ) -> HashSet<BindingId> {
-    let mut bindings = HashSet::new();
+    let mut bindings = HashSet::default();
 
     for item in &module.body {
         if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(ExportDecl {
@@ -173,7 +173,7 @@ fn collect_export_shadow_bindings(
 
 fn collect_export_rename_plans(
     module: &Module,
-    module_names: &std::collections::HashSet<Atom>,
+    module_names: &crate::collections::HashSet<Atom>,
     binding_infos: &HashMap<Atom, TopLevelBindingInfo>,
     shadow_index: &RenameShadowIndex,
     jsx_tags: &HashSet<BindingId>,
@@ -401,8 +401,8 @@ fn compute_freed_names(
     // Only include edges that the planner would actually accept: the exported
     // name must not be shorter than the orig, and the orig binding must not
     // already be an `export` declaration.
-    let mut rename_edges: HashMap<Atom, Atom> = HashMap::new();
-    let mut edge_sources: HashMap<Atom, BindingId> = HashMap::new();
+    let mut rename_edges: HashMap<Atom, Atom> = HashMap::default();
+    let mut edge_sources: HashMap<Atom, BindingId> = HashMap::default();
     for item in &module.body {
         if let ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(NamedExport {
             specifiers,
@@ -469,7 +469,7 @@ fn compute_freed_names(
     // Step 1b: remove edges whose target is claimed by multiple sources.
     // The planner will reject all but one via `target_name_already_planned`,
     // but we can't predict which wins, so conservatively drop all of them.
-    let mut target_counts: HashMap<Atom, usize> = HashMap::new();
+    let mut target_counts: HashMap<Atom, usize> = HashMap::default();
     for target in rename_edges.values() {
         *target_counts.entry(target.clone()).or_default() += 1;
     }
@@ -478,7 +478,7 @@ fn compute_freed_names(
     // Multiple aliases can resolve to one real binding, but the planner
     // accepts at most one rename for that binding. We cannot treat every
     // losing alias as removed, so none of their names are predictably freed.
-    let mut source_counts: HashMap<BindingId, usize> = HashMap::new();
+    let mut source_counts: HashMap<BindingId, usize> = HashMap::default();
     for source in rename_edges
         .keys()
         .filter_map(|name| edge_sources.get(name))
@@ -496,7 +496,7 @@ fn compute_freed_names(
 
     // Step 2: for each edge, follow the chain to see if it terminates at a free
     // name.  Mark all names along successful chains as freed.
-    let mut freed = HashSet::new();
+    let mut freed = HashSet::default();
     for start in rename_edges.keys() {
         if freed.contains(start) {
             continue;
@@ -504,7 +504,7 @@ fn compute_freed_names(
         // Walk the chain, collecting visited names
         let mut chain = Vec::new();
         let mut cursor = start;
-        let mut visited = HashSet::new();
+        let mut visited = HashSet::default();
         let terminates_free = loop {
             if !visited.insert(cursor.clone()) {
                 break false; // cycle
@@ -559,8 +559,8 @@ fn collect_competing_claims(
     module_names: &HashSet<Atom>,
     shadow_index: &RenameShadowIndex,
 ) -> (HashSet<BindingId>, HashSet<Atom>) {
-    let mut claimed_sources = HashSet::new();
-    let mut claimed_targets = HashSet::new();
+    let mut claimed_sources = HashSet::default();
+    let mut claimed_targets = HashSet::default();
     for item in &module.body {
         if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(ExportDecl {
             decl: Decl::Var(var),
@@ -807,7 +807,7 @@ fn rewrite_export_aliases(module: &mut Module, plans: &[ExportRenamePlan]) {
         .collect();
 
     // Collect alias var names to remove (var h = p where h was the alias)
-    let alias_var_names: std::collections::HashSet<Atom> = plans
+    let alias_var_names: crate::collections::HashSet<Atom> = plans
         .iter()
         .flat_map(|plan| plan.alias_names.iter().cloned())
         .collect();
@@ -936,7 +936,7 @@ fn resolve_to_real_binding<'a>(
 ) -> (&'a TopLevelBindingInfo, Atom, Vec<Atom>) {
     let mut current_info = info;
     let mut current_name = name.clone();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut alias_names = Vec::new();
 
     loop {

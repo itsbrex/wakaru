@@ -903,8 +903,8 @@ fn inspection_does_not_accept_offsetting_component_count_changes() {
         TopLevelItem {
             declared_names: Vec::new(),
             top_level_var_names: Vec::new(),
-            referenced_names: HashSet::new(),
-            written_names: HashSet::new(),
+            referenced_names: HashSet::default(),
+            written_names: HashSet::default(),
             is_module_decl: false,
         },
     ];
@@ -1004,7 +1004,7 @@ fn scope_hoist_trace_reports_cross_write_hub_topology() {
 
 #[test]
 fn cluster_filename_dedup_is_case_insensitive() {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     assert_eq!(
         dedup_cluster_filename("chunk_Helper.js", &mut seen),
         "chunk_Helper.js"
@@ -1702,7 +1702,7 @@ fn unreachable_effectful_singleton_folds_into_entry() {
             })
             .collect()
     };
-    let mut reachable: HashSet<String> = HashSet::new();
+    let mut reachable: HashSet<String> = HashSet::default();
     let mut queue = vec![entry.filename.clone()];
     while let Some(filename) = queue.pop() {
         if !reachable.insert(filename.clone()) {

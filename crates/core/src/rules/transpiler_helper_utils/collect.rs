@@ -2,7 +2,7 @@
 //! function-assigned vars, helper imports) and collect their binding identities
 //! and kinds. The per-node recognition lives in `matchers`; this is the driver.
 
-use std::collections::HashMap;
+use crate::collections::HashMap;
 
 use swc_core::common::Mark;
 use swc_core::ecma::ast::{
@@ -35,7 +35,7 @@ pub(super) fn collect_transpiler_helpers_inner(
     // or Symbol.iterator — signals that Babel sub-helpers are present.
     let has_sub_helpers = module_has_babel_sub_helper_signals(module);
 
-    let mut helpers = HashMap::new();
+    let mut helpers = HashMap::default();
     for item in &module.body {
         match item {
             // function _interopRequireDefault(obj) { ... }
@@ -160,8 +160,8 @@ pub(super) fn collect_swc_member_helpers(
     HashMap<BindingKey, TranspilerHelperKind>,
 ) {
     let direct_writes = BindingUseIndex::collect_direct_write_bindings(module);
-    let mut callable_helpers = HashMap::new();
-    let mut namespaces = HashMap::new();
+    let mut callable_helpers = HashMap::default();
+    let mut namespaces = HashMap::default();
 
     for item in &module.body {
         if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item {

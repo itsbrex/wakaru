@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::common::{Mark, Span, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
@@ -32,9 +32,9 @@ impl UnOptionalChaining {
         Self {
             unresolved_mark,
             policy: RewritePolicy::from_level(level),
-            uninitialized_bindings: HashSet::new(),
-            binding_references: HashMap::new(),
-            consumed_uninitialized_bindings: HashSet::new(),
+            uninitialized_bindings: HashSet::default(),
+            binding_references: HashMap::default(),
+            consumed_uninitialized_bindings: HashSet::default(),
         }
     }
 }
@@ -539,8 +539,8 @@ fn try_logical_and_optional_chain_prefix(
 
     let first = extract_logical_and_non_null_segment(terms, 0, unresolved_mark, policy)?;
     let mut temps = Vec::new();
-    let mut temp_values = HashMap::new();
-    let mut temp_call_contexts = HashMap::new();
+    let mut temp_values = HashMap::default();
+    let mut temp_call_contexts = HashMap::default();
     let mut chain = if let Some(real_rhs) = first.real_rhs.as_ref() {
         let Expr::Ident(tmp) = strip_parens(&first.checked) else {
             return None;
@@ -822,8 +822,8 @@ fn try_flattened_strict_optional_chain(
     }
 
     let first = extract_null_single(terms[0])?;
-    let mut temp_values = HashMap::new();
-    let mut temp_call_contexts = HashMap::new();
+    let mut temp_values = HashMap::default();
+    let mut temp_call_contexts = HashMap::default();
     let mut temps = Vec::new();
     let (mut chain, mut current_tmp) = if let Some((first_tmp, chain)) =
         extract_flattened_assignment_segment(&first, terms[1], unresolved_mark)
@@ -913,8 +913,8 @@ fn try_flattened_mixed_loose_root_optional_chain(
     let mut chain = base.clone();
     let mut current_tmp = base;
     let mut temps = Vec::new();
-    let mut temp_values = HashMap::new();
-    let mut temp_call_contexts = HashMap::new();
+    let mut temp_values = HashMap::default();
+    let mut temp_call_contexts = HashMap::default();
 
     let mut index = 1;
     while index < terms.len() {
@@ -973,8 +973,8 @@ fn try_flattened_loose_optional_chain(
         return None;
     }
 
-    let mut temp_values = HashMap::new();
-    let mut temp_call_contexts = HashMap::new();
+    let mut temp_values = HashMap::default();
+    let mut temp_call_contexts = HashMap::default();
     let mut temps = Vec::new();
     let (mut chain, mut current_tmp) = if let Some((first_tmp, chain)) =
         extract_flattened_loose_assignment_segment(terms[0], unresolved_mark)

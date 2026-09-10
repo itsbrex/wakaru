@@ -27,7 +27,7 @@
 //! If all references to the helper are call sites we rewrote, the helper
 //! function declaration is dropped. Exported helpers are always preserved.
 
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{

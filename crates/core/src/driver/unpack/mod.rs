@@ -1,5 +1,5 @@
+use crate::collections::{HashMap, HashSet};
 use anyhow::{anyhow, Result};
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swc_core::common::{sync::Lrc, Mark, SourceMap, GLOBALS};
@@ -287,7 +287,7 @@ fn plan_public_paths(
     }
 
     let absolute_root = common_absolute_input_parent(inputs);
-    let mut claimed = HashSet::new();
+    let mut claimed = HashSet::default();
     // Every physical ESM identity claims its public path before generated
     // names are assigned. This includes reusable facades and plain inputs;
     // script-loaded bundle inputs have no relative-ESM identity in output.
@@ -473,7 +473,7 @@ pub fn unpack_prepared_inputs_with_policy(
                             .map(|(module, _)| (module.id.clone(), module.filename.clone()))
                             .collect::<HashSet<_>>()
                     } else {
-                        HashSet::new()
+                        HashSet::default()
                     };
                 // Keep this proof on modules whose original detector identity
                 // survives optional recursive splitting. Synthetic children do
@@ -487,7 +487,7 @@ pub fn unpack_prepared_inputs_with_policy(
                             .map(|module| (module.id.clone(), module.filename.clone()))
                             .collect::<HashSet<_>>()
                     } else {
-                        HashSet::new()
+                        HashSet::default()
                     };
                 let webpack_numeric_module_ids = detected
                     .result

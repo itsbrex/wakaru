@@ -61,7 +61,7 @@
 //! this transform as a loose assumption for exactly that reason, so the rule is
 //! gated to `standard` and above.
 
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::common::Spanned;
 use swc_core::ecma::ast::{
@@ -92,9 +92,9 @@ impl UnComputedProperties {
     pub fn new(rewrite_level: RewriteLevel) -> Self {
         Self {
             rewrite_level,
-            foldable_temp_bindings: HashSet::new(),
-            binding_references: HashMap::new(),
-            consumed_uninitialized_bindings: HashSet::new(),
+            foldable_temp_bindings: HashSet::default(),
+            binding_references: HashMap::default(),
+            consumed_uninitialized_bindings: HashSet::default(),
         }
     }
 }
@@ -253,7 +253,7 @@ impl Visit for UninitializedVarCollector {
 }
 
 fn collect_exported_binding_ids(module: &Module) -> HashSet<BindingId> {
-    let mut bindings = HashSet::new();
+    let mut bindings = HashSet::default();
 
     for item in &module.body {
         let ModuleItem::ModuleDecl(module_decl) = item else {

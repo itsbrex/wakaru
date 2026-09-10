@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, DUMMY_SP};
@@ -120,7 +120,7 @@ fn run_un_object_spread(
     let esbuild_define_normal_prop_helpers = if esbuild_aliases.has_spread_values_signals() {
         collect_esbuild_define_normal_prop_helpers(module, &esbuild_aliases)
     } else {
-        HashSet::new()
+        HashSet::default()
     };
     let mut local_helpers: HashMap<BindingKey, TranspilerHelperKind> = local_helper_context
         .helpers()
@@ -252,7 +252,7 @@ impl Default for UnObjectSpread<'_> {
 fn collect_uninitialized_object_spread_stubs(
     module: &Module,
 ) -> HashMap<BindingKey, TranspilerHelperKind> {
-    let mut helpers = HashMap::new();
+    let mut helpers = HashMap::default();
 
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
@@ -353,10 +353,10 @@ fn collect_mangled_esbuild_object_spread_helpers(
     define_normal_prop_helpers: &HashSet<BindingKey>,
 ) -> HashMap<BindingKey, TranspilerHelperKind> {
     if !aliases.has_spread_values_signals() && !aliases.has_spread_props_signals() {
-        return HashMap::new();
+        return HashMap::default();
     }
 
-    let mut helpers = HashMap::new();
+    let mut helpers = HashMap::default();
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
             continue;
@@ -484,7 +484,7 @@ fn collect_esbuild_define_normal_prop_helpers(
     module: &Module,
     aliases: &EsbuildObjectBuiltinAliases,
 ) -> HashSet<BindingKey> {
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
             continue;
@@ -870,7 +870,7 @@ fn collect_cross_module_object_spread_helpers(
     module_facts: &ModuleFactsMap,
     current_filename: Option<&str>,
 ) -> HashMap<BindingKey, TranspilerHelperKind> {
-    let mut helpers = HashMap::new();
+    let mut helpers = HashMap::default();
 
     for item in &module.body {
         let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {

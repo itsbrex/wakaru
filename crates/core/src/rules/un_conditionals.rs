@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::common::{Span, DUMMY_SP};
 use swc_core::ecma::ast::{
@@ -342,7 +342,7 @@ fn try_cond_to_switch_return(cond: &CondExpr, return_span: Span) -> Option<Stmt>
 fn collect_switch_chain(cond: &CondExpr) -> Option<SwitchChain> {
     let mut discriminant = None;
     let mut cases = Vec::new();
-    let mut seen_cases = HashSet::new();
+    let mut seen_cases = HashSet::default();
     let mut current = cond;
 
     loop {

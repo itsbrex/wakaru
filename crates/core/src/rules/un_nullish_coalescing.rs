@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::common::{Mark, Spanned, SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
@@ -29,9 +29,9 @@ impl UnNullishCoalescing {
         Self {
             unresolved_mark,
             policy: RewritePolicy::from_level(level),
-            uninitialized_bindings: HashSet::new(),
-            binding_references: HashMap::new(),
-            consumed_uninitialized_bindings: HashSet::new(),
+            uninitialized_bindings: HashSet::default(),
+            binding_references: HashMap::default(),
+            consumed_uninitialized_bindings: HashSet::default(),
         }
     }
 }

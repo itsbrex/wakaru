@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::util::take::Take;
@@ -439,7 +439,7 @@ fn collect_property_key_coercion_helpers(
         .into_keys()
         .collect();
     collect_property_key_typeof_helpers(module, unresolved_mark, &mut typeof_helpers);
-    let mut helpers = HashSet::new();
+    let mut helpers = HashSet::default();
 
     for item in &module.body {
         match item {
@@ -911,7 +911,7 @@ fn recover_computed_object_rest(
     module: &mut Module,
     context: &ComputedObjectRestContext<'_>,
 ) -> HashSet<BindingKey> {
-    let mut collapsed_key_aliases = HashSet::new();
+    let mut collapsed_key_aliases = HashSet::default();
     let mut processor = ComputedObjectRestProcessor {
         context,
         collapsed_key_aliases: &mut collapsed_key_aliases,
@@ -1458,10 +1458,10 @@ fn collect_mangled_esbuild_object_rest_helpers(
     aliases: &EsbuildObjectRestBuiltinAliases,
 ) -> HashMap<BindingKey, TranspilerHelperKind> {
     if !aliases.has_required_signals() {
-        return HashMap::new();
+        return HashMap::default();
     }
 
-    let mut helpers = HashMap::new();
+    let mut helpers = HashMap::default();
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
             continue;
@@ -1903,7 +1903,7 @@ impl ObjectRestProcessor<'_> {
             scope_names: &scope_names,
             reserved_names: self.reserved_names,
         };
-        let name = find_non_conflicting_alias("rest", conflicts, &HashSet::new());
+        let name = find_non_conflicting_alias("rest", conflicts, &HashSet::default());
         let binding = BindingIdent {
             id: fresh_binding_ident(name, ret.span),
             type_ann: None,
@@ -2116,11 +2116,11 @@ impl Visit for ObjectRestSpreadCandidateVisitor<'_> {
             &spread.expr,
             self.named_helpers,
             self.local_helpers,
-            &HashSet::new(),
+            &HashSet::default(),
             self.cross_module_namespaces,
-            &HashMap::new(),
+            &HashMap::default(),
         )
-        .or_else(|| try_extract_owp_call(&spread.expr, &HashMap::new()))
+        .or_else(|| try_extract_owp_call(&spread.expr, &HashMap::default()))
         .is_some()
         {
             self.found = true;
@@ -2199,11 +2199,11 @@ impl VisitMut for ElidedRestSpreadReplacer<'_> {
             &spread.expr,
             self.named_helpers,
             self.local_helpers,
-            &HashSet::new(),
+            &HashSet::default(),
             self.cross_module_namespaces,
-            &HashMap::new(),
+            &HashMap::default(),
         )
-        .or_else(|| try_extract_owp_call(&spread.expr, &HashMap::new()));
+        .or_else(|| try_extract_owp_call(&spread.expr, &HashMap::default()));
         let Some((source, excluded_keys)) = extraction else {
             spread.visit_mut_children_with(self);
             return;
@@ -2558,7 +2558,7 @@ fn extract_exclusion_keys_from_array(arr: &swc_core::ecma::ast::ArrayLit) -> Opt
 fn collect_exclusion_arrays_from_module_items(
     items: &[ModuleItem],
 ) -> HashMap<BindingKey, Vec<Atom>> {
-    let mut arrays = HashMap::new();
+    let mut arrays = HashMap::default();
     for item in items {
         if let ModuleItem::Stmt(stmt) = item {
             collect_exclusion_arrays_from_stmt(stmt, &mut arrays);
@@ -2592,7 +2592,7 @@ fn remove_unused_exclusion_array_decls(
     body: &mut Vec<ModuleItem>,
     exclusion_arrays: &HashMap<BindingKey, Vec<Atom>>,
 ) {
-    let mut unused = HashSet::new();
+    let mut unused = HashSet::default();
     for key in exclusion_arrays.keys() {
         let ident = Ident::new(key.0.clone(), DUMMY_SP, key.1);
         if !ident_used_in_module_items(body, &ident) {
@@ -3327,10 +3327,10 @@ fn build_rest_destructuring(
     // Build a map from prop key → (local binding name, SyntaxContext) from preceding accesses.
     // Preserving the original SyntaxContext is critical so that downstream SmartRename
     // can match the destructuring binding to the body references via BindingRenamer.
-    let mut key_to_binding: std::collections::HashMap<Atom, (Atom, SyntaxContext)> =
-        std::collections::HashMap::new();
-    let mut key_to_default: std::collections::HashMap<Atom, Box<Expr>> =
-        std::collections::HashMap::new();
+    let mut key_to_binding: crate::collections::HashMap<Atom, (Atom, SyntaxContext)> =
+        crate::collections::HashMap::default();
+    let mut key_to_default: crate::collections::HashMap<Atom, Box<Expr>> =
+        crate::collections::HashMap::default();
     for access in merged {
         match access {
             PrecedingAccess::Destructuring(pairs) => {
@@ -3364,7 +3364,8 @@ fn build_rest_destructuring(
     }
 
     // Track generated aliases to avoid collisions between them
-    let mut used_aliases: std::collections::HashSet<Atom> = std::collections::HashSet::new();
+    let mut used_aliases: crate::collections::HashSet<Atom> =
+        crate::collections::HashSet::default();
 
     // Build destructuring props for each excluded key
     let mut props: Vec<ObjectPatProp> = Vec::new();
@@ -3461,12 +3462,12 @@ fn build_rest_assignment(
     source: &Expr,
     excluded_keys: &[Atom],
     merged: &[PrecedingAccess],
-    scope_names: &std::collections::HashSet<Atom>,
+    scope_names: &crate::collections::HashSet<Atom>,
 ) -> Option<Stmt> {
-    let mut key_to_binding: std::collections::HashMap<Atom, (Atom, SyntaxContext)> =
-        std::collections::HashMap::new();
-    let mut key_to_default: std::collections::HashMap<Atom, Box<Expr>> =
-        std::collections::HashMap::new();
+    let mut key_to_binding: crate::collections::HashMap<Atom, (Atom, SyntaxContext)> =
+        crate::collections::HashMap::default();
+    let mut key_to_default: crate::collections::HashMap<Atom, Box<Expr>> =
+        crate::collections::HashMap::default();
     for access in merged {
         match access {
             PrecedingAccess::Destructuring(pairs) => {
@@ -3633,7 +3634,7 @@ impl AliasNameConflicts<'_> {
 fn find_non_conflicting_alias(
     base: &str,
     conflicts: AliasNameConflicts<'_>,
-    used_aliases: &std::collections::HashSet<Atom>,
+    used_aliases: &crate::collections::HashSet<Atom>,
 ) -> Atom {
     let base_atom = Atom::from(base);
     if !conflicts.contains(&base_atom) && !used_aliases.contains(&base_atom) {
@@ -3673,11 +3674,11 @@ fn generated_alias_base(key: &str) -> String {
 }
 
 /// Collect all binding names from a list of statements (top-level idents only).
-fn collect_scope_names(stmts: &[Stmt]) -> std::collections::HashSet<Atom> {
+fn collect_scope_names(stmts: &[Stmt]) -> crate::collections::HashSet<Atom> {
     use swc_core::ecma::visit::{Visit, VisitWith};
 
     struct BindingCollector {
-        names: std::collections::HashSet<Atom>,
+        names: crate::collections::HashSet<Atom>,
     }
     impl Visit for BindingCollector {
         fn visit_ident(&mut self, id: &Ident) {
@@ -3685,7 +3686,7 @@ fn collect_scope_names(stmts: &[Stmt]) -> std::collections::HashSet<Atom> {
         }
     }
     let mut collector = BindingCollector {
-        names: std::collections::HashSet::new(),
+        names: crate::collections::HashSet::default(),
     };
     for stmt in stmts {
         stmt.visit_with(&mut collector);
@@ -3693,11 +3694,11 @@ fn collect_scope_names(stmts: &[Stmt]) -> std::collections::HashSet<Atom> {
     collector.names
 }
 
-fn collect_scope_names_module(items: &[ModuleItem]) -> std::collections::HashSet<Atom> {
+fn collect_scope_names_module(items: &[ModuleItem]) -> crate::collections::HashSet<Atom> {
     use swc_core::ecma::visit::{Visit, VisitWith};
 
     struct BindingCollector {
-        names: std::collections::HashSet<Atom>,
+        names: crate::collections::HashSet<Atom>,
     }
     impl Visit for BindingCollector {
         fn visit_ident(&mut self, id: &Ident) {
@@ -3705,7 +3706,7 @@ fn collect_scope_names_module(items: &[ModuleItem]) -> std::collections::HashSet
         }
     }
     let mut collector = BindingCollector {
-        names: std::collections::HashSet::new(),
+        names: crate::collections::HashSet::default(),
     };
     for item in items {
         item.visit_with(&mut collector);

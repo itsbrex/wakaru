@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, SyntaxContext, DUMMY_SP};
@@ -77,13 +77,13 @@ impl VisitMut for UnWebpackInterop {
         let mut namespace_replacer = WebpackNamespaceReplacer {
             initial_ref_counts: &initial_ref_counts,
             module_bindings: &module_bindings,
-            removed_caches: HashSet::new(),
+            removed_caches: HashSet::default(),
             unresolved_mark: self.unresolved_mark,
         };
         module.visit_mut_with(&mut namespace_replacer);
         remove_unused_namespace_cache_decls(module, &namespace_replacer.removed_caches);
 
-        let mut candidates: HashMap<BindingKey, Ident> = HashMap::new();
+        let mut candidates: HashMap<BindingKey, Ident> = HashMap::default();
         for item in &module.body {
             let ModuleItem::Stmt(Stmt::Decl(swc_core::ecma::ast::Decl::Var(var))) = item else {
                 continue;
@@ -166,7 +166,7 @@ impl VisitMut for UnWebpackInterop {
 }
 
 fn collect_module_bindings(module: &Module, unresolved_mark: Mark) -> HashSet<BindingKey> {
-    let mut bindings = HashSet::new();
+    let mut bindings = HashSet::default();
     for item in &module.body {
         match item {
             ModuleItem::ModuleDecl(ModuleDecl::Import(import)) => {
@@ -421,7 +421,7 @@ fn collect_binding_refs(module: &Module, targets: &HashSet<BindingKey>) -> HashS
 
     let mut collector = RefCollector {
         targets,
-        refs: HashSet::new(),
+        refs: HashSet::default(),
     };
     module.visit_with(&mut collector);
     collector.refs
@@ -454,7 +454,7 @@ fn collect_binding_ref_counts(module: &Module) -> HashMap<BindingKey, usize> {
     }
 
     let mut counter = RefCounter {
-        refs: HashMap::new(),
+        refs: HashMap::default(),
     };
     module.visit_with(&mut counter);
     counter.refs
@@ -636,7 +636,7 @@ fn build_shadow_avoidance_renames(
     to_inline: &mut HashMap<BindingKey, Ident>,
 ) -> Vec<BindingRename> {
     let mut used_names = collect_declared_names(module);
-    let mut base_renames: HashMap<BindingKey, Atom> = HashMap::new();
+    let mut base_renames: HashMap<BindingKey, Atom> = HashMap::default();
 
     for (getter, replacement) in to_inline.iter_mut() {
         if !binding_replacement_would_be_shadowed(module, getter, &replacement.sym) {
@@ -679,7 +679,7 @@ fn collect_declared_names(module: &Module) -> HashSet<Atom> {
 
     let mut names = collect_module_names(module);
     let mut collector = Collector {
-        names: HashSet::new(),
+        names: HashSet::default(),
     };
     module.visit_with(&mut collector);
     names.extend(collector.names);
@@ -985,7 +985,7 @@ mod tests {
 
     #[test]
     fn prefixed_name_uses_delimited_suffix() {
-        let mut used_names = HashSet::from([Atom::from("_value")]);
+        let mut used_names = HashSet::from_iter([Atom::from("_value")]);
 
         assert_eq!(
             fresh_prefixed_name(&Atom::from("value"), &mut used_names),

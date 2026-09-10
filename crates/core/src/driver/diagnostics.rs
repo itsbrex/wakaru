@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::collections::HashMap;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{sync::Lrc, Mark, SourceMap, GLOBALS};
@@ -32,7 +32,7 @@ pub(super) fn collect_input_parse_warnings(errors: &[ParseDiagnostic]) -> Vec<Un
     // Source locations identify occurrences, not distinct parser conditions.
     // Keep the first-seen signature order while collapsing repeated conditions
     // within one parsed file.
-    let mut group_indexes: HashMap<(&str, &str), usize> = HashMap::new();
+    let mut group_indexes: HashMap<(&str, &str), usize> = HashMap::default();
     let mut groups: Vec<(&ParseDiagnostic, usize)> = Vec::new();
 
     for error in errors {

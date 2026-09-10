@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{sync::Lrc, Mark, SourceMap, GLOBALS};
@@ -135,7 +135,7 @@ pub(crate) struct RequireIdRewriter<'a> {
     pub(crate) require_sym: Atom,
     pub(crate) unresolved_mark: Mark,
     pub(crate) from_filename: &'a str,
-    pub(crate) id_to_filename: &'a std::collections::HashMap<usize, String>,
+    pub(crate) id_to_filename: &'a crate::collections::HashMap<usize, String>,
 }
 
 impl VisitMut for RequireIdRewriter<'_> {
@@ -214,7 +214,7 @@ impl VisitMut for RequireStringIdRewriter<'_> {
 struct RequireNRewriter {
     require_sym: Atom,
     unresolved_mark: Mark,
-    getter_ids: std::collections::HashSet<(Atom, SyntaxContext)>,
+    getter_ids: crate::collections::HashSet<(Atom, SyntaxContext)>,
 }
 
 impl VisitMut for RequireNRewriter {
@@ -309,7 +309,7 @@ impl RequireNRewriter {
 
 /// Rewrites accesses like `getter.a` to `getter()`, where `getter` came from `require.n(...)`.
 struct RequireNAccessRewriter {
-    getter_ids: std::collections::HashSet<(Atom, SyntaxContext)>,
+    getter_ids: crate::collections::HashSet<(Atom, SyntaxContext)>,
 }
 
 impl VisitMut for RequireNAccessRewriter {
@@ -359,7 +359,7 @@ pub(crate) fn rewrite_require_n_accesses(
     let mut n_rewriter = RequireNRewriter {
         require_sym,
         unresolved_mark,
-        getter_ids: HashSet::new(),
+        getter_ids: HashSet::default(),
     };
     module.visit_mut_with(&mut n_rewriter);
     if !n_rewriter.getter_ids.is_empty() {
@@ -463,7 +463,7 @@ fn prepare_webpack4_modules(
     all_numeric: bool,
     cm: Lrc<SourceMap>,
 ) -> Option<DetectedBundle> {
-    let mut opaque_filenames = HashSet::new();
+    let mut opaque_filenames = HashSet::default();
 
     loop {
         let num_id_to_filename: HashMap<usize, String> = if all_numeric {
@@ -479,10 +479,10 @@ fn prepare_webpack4_modules(
                 })
                 .collect()
         } else {
-            HashMap::new()
+            HashMap::default()
         };
         let str_id_to_filename: HashMap<String, String> = if all_numeric {
-            HashMap::new()
+            HashMap::default()
         } else {
             descriptors
                 .iter()
@@ -492,7 +492,7 @@ fn prepare_webpack4_modules(
         };
 
         let mut emitted = Vec::with_capacity(descriptors.len());
-        let mut newly_opaque = HashSet::new();
+        let mut newly_opaque = HashSet::default();
         for descriptor in descriptors {
             if opaque_filenames.contains(&descriptor.filename) {
                 emitted.push(None);
@@ -1045,7 +1045,7 @@ fn extract_entry_id_from_assign(
 }
 
 fn collect_declared_idents(stmts: &[Stmt]) -> HashSet<Atom> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for stmt in stmts {
         match stmt {
             Stmt::Decl(swc_core::ecma::ast::Decl::Fn(fn_decl)) => {
@@ -1065,7 +1065,7 @@ fn collect_declared_idents(stmts: &[Stmt]) -> HashSet<Atom> {
 }
 
 fn collect_called_idents(stmts: &[Stmt]) -> HashSet<Atom> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for stmt in stmts {
         collect_called_idents_from_stmt(stmt, &mut names);
     }
@@ -1855,7 +1855,7 @@ impl VisitMut for GuardedGlobalFallbackReplacer<'_> {
                 ..
             })
         ) {
-            let mut earlier_global_checkers = HashSet::new();
+            let mut earlier_global_checkers = HashSet::default();
             self.visit_logical_or_chain(expr, &mut earlier_global_checkers);
             return;
         }

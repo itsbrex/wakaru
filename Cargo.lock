@@ -2053,6 +2053,7 @@ dependencies = [
  "anyhow",
  "insta",
  "rayon",
+ "rustc-hash",
  "serde_json",
  "similar",
  "sourcemap",

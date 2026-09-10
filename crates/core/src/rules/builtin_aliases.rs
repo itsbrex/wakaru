@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::common::{Mark, Span};
 use swc_core::ecma::ast::{
@@ -165,7 +165,7 @@ pub(crate) fn inline_builtin_aliases_stmts(
 /// The local bindings named by `export { local }` / `export { local as x }`
 /// specifiers without a source.
 pub(crate) fn collect_local_export_specifier_keys(module: &Module) -> HashSet<BindingKey> {
-    let mut keys = HashSet::new();
+    let mut keys = HashSet::default();
     for item in &module.body {
         let ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(export)) = item else {
             continue;
@@ -190,9 +190,9 @@ fn collect_module_candidates(
     unresolved_mark: Option<Mark>,
     options: BuiltinAliasInlineOptions,
 ) -> HashMap<BindingKey, BuiltinAliasCandidate> {
-    let mut candidates = HashMap::new();
-    let mut seen_single_decl_keys = HashSet::new();
-    let mut duplicate_keys = HashSet::new();
+    let mut candidates = HashMap::default();
+    let mut seen_single_decl_keys = HashSet::default();
+    let mut duplicate_keys = HashSet::default();
 
     for (def_index, item) in module.body.iter().enumerate() {
         let ModuleItem::Stmt(stmt) = item else {
@@ -220,9 +220,9 @@ fn collect_stmt_candidates(
     unresolved_mark: Option<Mark>,
     options: BuiltinAliasInlineOptions,
 ) -> HashMap<BindingKey, BuiltinAliasCandidate> {
-    let mut candidates = HashMap::new();
-    let mut seen_single_decl_keys = HashSet::new();
-    let mut duplicate_keys = HashSet::new();
+    let mut candidates = HashMap::default();
+    let mut seen_single_decl_keys = HashSet::default();
+    let mut duplicate_keys = HashSet::default();
 
     for (def_index, stmt) in stmts.iter().enumerate() {
         collect_candidate_from_stmt(
@@ -375,7 +375,7 @@ fn is_builtin_alias_definition_stmt<T>(stmt: &Stmt, candidates: &HashMap<Binding
 }
 
 fn module_has_ref_before_index(module: &Module, key: &BindingKey, index: usize) -> bool {
-    let targets = HashSet::from([key.clone()]);
+    let targets = HashSet::from_iter([key.clone()]);
     module
         .body
         .iter()
@@ -384,7 +384,7 @@ fn module_has_ref_before_index(module: &Module, key: &BindingKey, index: usize) 
 }
 
 fn stmts_have_ref_before_index(stmts: &[Stmt], key: &BindingKey, index: usize) -> bool {
-    let targets = HashSet::from([key.clone()]);
+    let targets = HashSet::from_iter([key.clone()]);
     stmts
         .iter()
         .take(index)

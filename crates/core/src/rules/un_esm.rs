@@ -1,5 +1,6 @@
+use crate::collections::{HashMap, HashSet};
 use std::cell::OnceCell;
-use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::collections::hash_map::Entry;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Span, SyntaxContext, DUMMY_SP};
@@ -328,7 +329,7 @@ impl VisitMut for UnEsm {
         }
 
         // For each unique name, find the last non-void index
-        let mut last_real: HashMap<Option<Atom>, usize> = HashMap::new();
+        let mut last_real: HashMap<Option<Atom>, usize> = HashMap::default();
         for e in &export_entries {
             if !e.is_void {
                 last_real.insert(e.name.clone(), e.classified_idx);
@@ -336,7 +337,8 @@ impl VisitMut for UnEsm {
         }
 
         // Build drop set
-        let mut drop_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut drop_set: crate::collections::HashSet<usize> =
+            crate::collections::HashSet::default();
         for e in &export_entries {
             if e.is_void {
                 drop_set.insert(e.classified_idx);
@@ -351,7 +353,7 @@ impl VisitMut for UnEsm {
         // longer needs a local import. The export-from declaration itself is
         // the module evaluation dependency. If any getter is dropped or the
         // binding has another use, retain the ordinary import.
-        let mut kept_reexport_counts: HashMap<BindingId, usize> = HashMap::new();
+        let mut kept_reexport_counts: HashMap<BindingId, usize> = HashMap::default();
         for (idx, item) in classified.iter().enumerate() {
             if drop_set.contains(&idx) {
                 continue;
@@ -373,10 +375,11 @@ impl VisitMut for UnEsm {
 
         // Phase 3: collect imports — build source_map keyed by String
         let mut source_order: Vec<String> = Vec::new();
-        let mut source_map: HashMap<String, SourceEntry> = HashMap::new();
+        let mut source_map: HashMap<String, SourceEntry> = HashMap::default();
 
         // First pass: mark which sources have CJS requires
-        let mut cjs_sources: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut cjs_sources: crate::collections::HashSet<String> =
+            crate::collections::HashSet::default();
         for c in classified.iter() {
             let src = match c {
                 Classified::CjsRequire(CjsRequireKind::Bare { source }) => source.clone(),
@@ -531,7 +534,7 @@ impl VisitMut for UnEsm {
         // Collect local names that conflict with export names. Export names
         // take priority (they're meaningful from the original source), so we
         // rename the conflicting locals to free up the name for the export.
-        let mut local_names: HashSet<Atom> = HashSet::new();
+        let mut local_names: HashSet<Atom> = HashSet::default();
         for item in &import_decls {
             if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item {
                 for spec in &import.specifiers {
@@ -558,7 +561,7 @@ impl VisitMut for UnEsm {
         // Find export names that clash with existing locals.
         // Export names take priority (meaningful from original source), so
         // rename the conflicting locals before building export items.
-        let mut export_names: HashSet<Atom> = HashSet::new();
+        let mut export_names: HashSet<Atom> = HashSet::default();
         for (idx, c) in classified.iter().enumerate() {
             if drop_set.contains(&idx) {
                 continue;
@@ -1535,8 +1538,8 @@ fn collect_stable_named_properties(
         undefined_after_value: bool,
     }
 
-    let mut direct_writes: HashMap<Atom, DirectWrites> = HashMap::new();
-    let mut exports_bindings = HashSet::new();
+    let mut direct_writes: HashMap<Atom, DirectWrites> = HashMap::default();
+    let mut exports_bindings = HashSet::default();
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Expr(statement)) = item else {
             continue;
@@ -1573,7 +1576,7 @@ fn collect_stable_named_properties(
         }
     }
     if exports_bindings.len() != 1 {
-        return HashSet::new();
+        return HashSet::default();
     }
     let exports_binding = exports_bindings
         .iter()
@@ -1583,7 +1586,7 @@ fn collect_stable_named_properties(
     // A bare escape/rebinding of `exports`, a computed access, or a delete
     // could change any named property. Keep the proof deliberately local to
     // modules whose complete runtime surface is static member access.
-    let mut write_counts: HashMap<Atom, usize> = HashMap::new();
+    let mut write_counts: HashMap<Atom, usize> = HashMap::default();
     for site in uses.use_sites(exports_binding) {
         match &site.kind {
             UseKind::StaticMemberRead(property) | UseKind::StaticMemberWrite(property)
@@ -1593,13 +1596,13 @@ fn collect_stable_named_properties(
                 // property as an accessor, and a `__proto__` write changes
                 // lookup for names without an own write. Neither surfaces as
                 // a write of the affected name, so the whole proof fails.
-                return HashSet::new();
+                return HashSet::default();
             }
             UseKind::StaticMemberRead(_) | UseKind::TypeofOperand => {}
             UseKind::StaticMemberWrite(property) => {
                 *write_counts.entry(property.clone()).or_default() += 1;
             }
-            _ => return HashSet::new(),
+            _ => return HashSet::default(),
         }
     }
 
@@ -1613,7 +1616,7 @@ fn collect_stable_named_properties(
             .iter()
             .any(|site| !matches!(site.kind, UseKind::TypeofOperand))
     }) {
-        return HashSet::new();
+        return HashSet::default();
     }
 
     direct_writes
@@ -1642,7 +1645,7 @@ impl<'a> UnresolvedBindingIdCollector<'a> {
         Self {
             name,
             unresolved_mark,
-            ids: HashSet::new(),
+            ids: HashSet::default(),
         }
     }
 }
@@ -1674,8 +1677,8 @@ fn recover_stable_commonjs_reads(
 
     let uses = BindingUseIndex::collect_module_items(body);
     let mut default_binding = None;
-    let mut stable_named_bindings = HashMap::new();
-    let mut named_bindings = HashMap::new();
+    let mut stable_named_bindings = HashMap::default();
+    let mut named_bindings = HashMap::default();
 
     for item in body {
         item.visit_mut_with(&mut CommonJsReadRewriter {
@@ -4225,7 +4228,7 @@ impl RequireNamedMemberMutationCollector {
         let mut collector = Self {
             unresolved_mark,
             write_target_depth: 0,
-            mutations: HashSet::new(),
+            mutations: HashSet::default(),
         };
         module.visit_with(&mut collector);
         collector.mutations
@@ -4396,11 +4399,11 @@ fn prove_toplevel_require_named_member_args(
     let uses = BindingUseIndex::collect(module);
     let provider_member_mutations =
         RequireNamedMemberMutationCollector::collect(module, unresolved_mark);
-    let mut claimed_source_by_local: HashMap<Atom, String> = HashMap::new();
-    let mut claimed_local: HashMap<Atom, Ident> = HashMap::new();
+    let mut claimed_source_by_local: HashMap<Atom, String> = HashMap::default();
+    let mut claimed_local: HashMap<Atom, Ident> = HashMap::default();
     let mut plan = ToplevelRequireNamedMemberPlan {
-        replacements: HashMap::new(),
-        inserts: HashMap::new(),
+        replacements: HashMap::default(),
+        inserts: HashMap::default(),
     };
 
     for candidate in candidates {
@@ -4613,7 +4616,7 @@ impl RequireDefaultMemberMutationCollector {
         let mut collector = Self {
             unresolved_mark,
             write_target_depth: 0,
-            mutations: HashSet::new(),
+            mutations: HashSet::default(),
         };
         module.visit_with(&mut collector);
         collector.mutations
@@ -4796,10 +4799,10 @@ fn prove_toplevel_require_default_member_args(
         RequireDefaultMemberMutationCollector::collect(module, unresolved_mark);
     let mut used_names = declared_names;
     used_names.extend(unresolved_reference_names);
-    let mut claimed_local_by_source: HashMap<String, Ident> = HashMap::new();
+    let mut claimed_local_by_source: HashMap<String, Ident> = HashMap::default();
     let mut plan = ToplevelRequireDefaultMemberPlan {
-        replacements: HashMap::new(),
-        inserts: HashMap::new(),
+        replacements: HashMap::default(),
+        inserts: HashMap::default(),
     };
     for candidate in candidates {
         if provider_member_mutations.contains(&candidate.source) {
@@ -4901,7 +4904,7 @@ fn collect_default_only_inline_interop_bindings(
     unresolved_mark: Mark,
 ) -> HashSet<BindingId> {
     let uses = OnceCell::new();
-    let mut bindings = HashSet::new();
+    let mut bindings = HashSet::default();
 
     for (item_idx, item) in module.body.iter().enumerate() {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) = item else {
@@ -5285,7 +5288,7 @@ fn collect_stable_require_bindings(
     uses: &BindingUseIndex,
     unresolved_mark: Mark,
 ) -> HashMap<BindingId, String> {
-    let mut bindings = HashMap::new();
+    let mut bindings = HashMap::default();
     for item in &module.body {
         let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = item else {
             continue;
@@ -6593,7 +6596,7 @@ fn collect_all_identifier_names(module: &Module) -> HashSet<Atom> {
     }
 
     let mut collector = Collector {
-        names: HashSet::new(),
+        names: HashSet::default(),
     };
     module.visit_with(&mut collector);
     collector.names
@@ -6763,7 +6766,7 @@ mod tests {
 
     #[test]
     fn default_import_fallback_uses_delimited_suffixes() {
-        let mut used_names = HashSet::new();
+        let mut used_names = HashSet::default();
 
         assert_eq!(fresh_default_import_name(&mut used_names), "defaultExport");
         assert_eq!(
@@ -6778,7 +6781,7 @@ mod tests {
 
     #[test]
     fn prefixed_name_uses_delimited_suffix() {
-        let mut used_names = HashSet::from([Atom::from("_value")]);
+        let mut used_names = HashSet::from_iter([Atom::from("_value")]);
 
         assert_eq!(
             fresh_prefixed_name(&Atom::from("value"), &mut used_names),
@@ -6789,7 +6792,7 @@ mod tests {
     #[test]
     fn get_or_insert_records_source_order_once() {
         let mut order = Vec::new();
-        let mut map = HashMap::new();
+        let mut map = HashMap::default();
 
         get_or_insert(&mut order, &mut map, "react".to_string());
         get_or_insert(&mut order, &mut map, "react".to_string());

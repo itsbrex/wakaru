@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::ecma::ast::{
@@ -500,7 +500,7 @@ pub(crate) fn collect_constructor_sensitive_values(module: &Module) -> HashSet<V
     let mut collector = ConstructorSensitiveUseCollector::default();
     module.visit_with(&mut collector);
 
-    let mut sources_by_target: HashMap<ValueKey, Vec<ValueKey>> = HashMap::new();
+    let mut sources_by_target: HashMap<ValueKey, Vec<ValueKey>> = HashMap::default();
     for (target, source) in collector.aliases {
         sources_by_target.entry(target).or_default().push(source);
     }

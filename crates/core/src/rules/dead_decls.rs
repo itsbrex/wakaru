@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use crate::collections::{HashMap, HashSet};
+use std::collections::VecDeque;
 
 use swc_core::common::{BytePos, Span, DUMMY_SP};
 use swc_core::ecma::ast::{
@@ -198,7 +199,7 @@ where
 {
     let mut collector = UninitializedRefCollector {
         uninitialized_bindings,
-        references: HashMap::new(),
+        references: HashMap::default(),
     };
     node.visit_with(&mut collector);
     collector.references
@@ -270,7 +271,7 @@ fn collect_eval_protected_uninitialized(module: &Module) -> HashSet<BindingId> {
 fn collect_global_enumerated_uninitialized(module: &Module) -> HashSet<BindingId> {
     let uninitialized = collect_current_scope_uninitialized_from_module(module);
     if uninitialized.is_empty() {
-        return HashSet::new();
+        return HashSet::default();
     }
 
     let mut observer = GlobalForInObserver::default();
@@ -278,7 +279,7 @@ fn collect_global_enumerated_uninitialized(module: &Module) -> HashSet<BindingId
     if observer.found {
         uninitialized
     } else {
-        HashSet::new()
+        HashSet::default()
     }
 }
 
@@ -465,8 +466,8 @@ fn collect_current_scope_uninitialized_from_block(
 }
 
 fn compute_alive(module: &Module, candidates: &HashSet<BindingKey>) -> HashSet<BindingKey> {
-    let mut edges: HashMap<BindingKey, HashSet<BindingKey>> = HashMap::new();
-    let mut roots: HashSet<BindingKey> = HashSet::new();
+    let mut edges: HashMap<BindingKey, HashSet<BindingKey>> = HashMap::default();
+    let mut roots: HashSet<BindingKey> = HashSet::default();
 
     for item in &module.body {
         match item {
@@ -500,7 +501,7 @@ fn compute_alive(module: &Module, candidates: &HashSet<BindingKey>) -> HashSet<B
 
         let mut collector = RootRefCollector {
             candidates,
-            found: HashSet::new(),
+            found: HashSet::default(),
         };
         item.visit_with(&mut collector);
         roots.extend(collector.found);
@@ -529,7 +530,7 @@ fn collect_refs_in_node<'a, N: VisitWith<RootRefCollector<'a>>>(
 ) -> HashSet<BindingKey> {
     let mut collector = RootRefCollector {
         candidates,
-        found: HashSet::new(),
+        found: HashSet::default(),
     };
     node.visit_with(&mut collector);
     collector.found.remove(self_key);
@@ -571,7 +572,7 @@ fn is_helper_init(expr: &Expr) -> bool {
 pub(crate) fn compute_pre_dead_decl_spans(module: &Module) -> HashSet<(BytePos, BytePos)> {
     let candidates_with_spans = collect_removable_bindings_with_spans(module);
     if candidates_with_spans.is_empty() {
-        return HashSet::new();
+        return HashSet::default();
     }
     let candidates: HashSet<BindingKey> = candidates_with_spans.keys().cloned().collect();
     let alive = compute_alive(module, &candidates);
@@ -583,8 +584,8 @@ pub(crate) fn compute_pre_dead_decl_spans(module: &Module) -> HashSet<(BytePos, 
 }
 
 fn collect_removable_bindings_with_spans(module: &Module) -> HashMap<BindingKey, RemovableBinding> {
-    let mut bindings = HashMap::new();
-    let mut poisoned = HashSet::new();
+    let mut bindings = HashMap::default();
+    let mut poisoned = HashSet::default();
     for item in &module.body {
         match item {
             ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) => {

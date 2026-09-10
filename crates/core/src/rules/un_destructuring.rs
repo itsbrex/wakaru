@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Span, Spanned, SyntaxContext, DUMMY_SP};
@@ -49,7 +49,7 @@ impl UnDestructuring {
             level,
             sliced_to_array_helpers: None,
             array_like_to_array_helpers: None,
-            consumed_sliced_to_array_helpers: HashSet::new(),
+            consumed_sliced_to_array_helpers: HashSet::default(),
         }
     }
 
@@ -63,7 +63,7 @@ impl UnDestructuring {
             level,
             sliced_to_array_helpers: Some(collect_sliced_to_array_helpers(local_helpers)),
             array_like_to_array_helpers: None,
-            consumed_sliced_to_array_helpers: HashSet::new(),
+            consumed_sliced_to_array_helpers: HashSet::default(),
         }
     }
 
@@ -2669,7 +2669,7 @@ fn declaration_kind_for_pattern_bindings(
     stmts: &[Stmt],
     fallback: VarDeclKind,
 ) -> VarDeclKind {
-    let mut bindings = HashSet::new();
+    let mut bindings = HashSet::default();
     collect_pat_binding_keys(pat, &mut bindings);
     if bindings.is_empty() {
         return fallback;
@@ -2702,7 +2702,7 @@ fn widest_var_decl_kind(left: VarDeclKind, right: VarDeclKind) -> VarDeclKind {
 }
 
 fn pat_binds_any_key(pat: &Pat, targets: &HashSet<BindingKey>) -> bool {
-    let mut bindings = HashSet::new();
+    let mut bindings = HashSet::default();
     collect_pat_binding_keys(pat, &mut bindings);
     bindings.iter().any(|key| targets.contains(key))
 }
@@ -2855,11 +2855,11 @@ fn nest_pat_destructuring(
 /// Remove function/var declarations for helper bindings that are no longer
 /// referenced after destructuring reconstruction consumed their call sites.
 fn remove_unreferenced_helpers(stmts: &mut Vec<Stmt>, helpers: &[BindingKey]) {
-    use std::collections::HashSet;
+    use crate::collections::HashSet;
     let helper_set: HashSet<&BindingKey> = helpers.iter().collect();
 
     // Collect which helpers are still referenced outside their own declaration.
-    let mut referenced: HashSet<&BindingKey> = HashSet::new();
+    let mut referenced: HashSet<&BindingKey> = HashSet::default();
     for stmt in stmts.iter() {
         let declaring = stmt_declares_binding(stmt);
         for key in &helper_set {

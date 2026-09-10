@@ -2855,7 +2855,7 @@ fn is_call_to_ident(expr: &Expr, ident: &Ident) -> bool {
 }
 /// Collect bindings for `_maybeArrayLike` declarations detected by body shape.
 pub(crate) fn collect_maybe_array_like_bindings(module: &Module) -> HashSet<BindingKey> {
-    let mut bindings = HashSet::new();
+    let mut bindings = HashSet::default();
     for item in &module.body {
         match item {
             ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl)))

@@ -356,7 +356,7 @@ pub(crate) fn runtime_binding_renames_are_safe(module: &Module, renames: &[Bindi
     let bindings = relevant
         .iter()
         .map(|rename| rename.old.clone())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<crate::collections::HashSet<_>>();
     let shadow_index = RenameShadowIndex::for_bindings(module, &bindings);
 
     relevant.into_iter().all(|rename| {
@@ -398,10 +398,10 @@ pub(crate) fn deconflict_runtime_binding_renames(
     let bindings = relevant
         .iter()
         .map(|rename| rename.old.clone())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<crate::collections::HashSet<_>>();
     let shadow_index = RenameShadowIndex::for_bindings(module, &bindings);
     let declared_bindings = uses.declared_bindings();
-    let mut conflicts = std::collections::HashSet::new();
+    let mut conflicts = crate::collections::HashSet::default();
 
     for rename in relevant {
         if !module_names.contains(&rename.new)
@@ -428,7 +428,7 @@ pub(crate) fn deconflict_runtime_binding_renames(
         .into_iter()
         .chain(declared_bindings)
         .map(|binding| binding.0)
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<crate::collections::HashSet<_>>();
     used_names.extend(renames.iter().map(|rename| rename.new.clone()));
 
     let mut conflicts = conflicts.into_iter().collect::<Vec<_>>();
@@ -449,7 +449,10 @@ pub(crate) fn deconflict_runtime_binding_renames(
     runtime_binding_renames_are_safe(module, renames)
 }
 
-fn fresh_runtime_local_name(name: &Atom, used_names: &mut std::collections::HashSet<Atom>) -> Atom {
+fn fresh_runtime_local_name(
+    name: &Atom,
+    used_names: &mut crate::collections::HashSet<Atom>,
+) -> Atom {
     let base = Atom::from(format!("_{name}"));
     if used_names.insert(base.clone()) {
         return base;
@@ -606,7 +609,7 @@ pub(crate) enum DetectedModuleFailure {
 pub(crate) struct DetectedBundle {
     pub(crate) result: UnpackResult,
     pub(crate) prepared: Vec<Option<PreparedModuleAst>>,
-    pub(crate) module_failures: std::collections::HashMap<String, DetectedModuleFailure>,
+    pub(crate) module_failures: crate::collections::HashMap<String, DetectedModuleFailure>,
     /// Numeric module identities proven directly from webpack container keys.
     ///
     /// The public/raw module id is a string for compatibility, so it cannot
@@ -614,12 +617,12 @@ pub(crate) struct DetectedBundle {
     /// numeric key (`"17"`). The latter does not prove the type webpack passed
     /// as `moduleId`, so runtime recovery must not parse the public id or guess
     /// from the emitted filename.
-    pub(crate) webpack_numeric_module_ids: std::collections::HashMap<String, f64>,
+    pub(crate) webpack_numeric_module_ids: crate::collections::HashMap<String, f64>,
     /// Factories whose surrounding container proves webpack 4's minified
     /// `module.i` module-identity spelling. Modern webpack uses `module.id`;
     /// a bare `.i` in a modern chunk must not be guessed from the table key.
-    pub(crate) webpack_legacy_module_i: std::collections::HashSet<String>,
-    pub(crate) chunk_ids: std::collections::HashSet<usize>,
+    pub(crate) webpack_legacy_module_i: crate::collections::HashSet<String>,
+    pub(crate) chunk_ids: crate::collections::HashSet<usize>,
     pub(crate) input_has_esm_declarations: bool,
     materialize_cm: Option<Lrc<SourceMap>>,
 }
@@ -665,7 +668,7 @@ impl DetectedBundle {
 
     pub(crate) fn with_module_failures(
         mut self,
-        failures: std::collections::HashMap<String, DetectedModuleFailure>,
+        failures: crate::collections::HashMap<String, DetectedModuleFailure>,
     ) -> Self {
         debug_assert!(failures.keys().all(|filename| self
             .result
@@ -678,7 +681,7 @@ impl DetectedBundle {
 
     pub(crate) fn with_webpack_numeric_module_ids(
         mut self,
-        module_ids: std::collections::HashMap<String, f64>,
+        module_ids: crate::collections::HashMap<String, f64>,
     ) -> Self {
         debug_assert!(module_ids.keys().all(|filename| self
             .result
@@ -691,7 +694,7 @@ impl DetectedBundle {
 
     pub(crate) fn with_webpack_legacy_module_i(
         mut self,
-        filenames: std::collections::HashSet<String>,
+        filenames: crate::collections::HashSet<String>,
     ) -> Self {
         debug_assert!(filenames.iter().all(|filename| self
             .result
@@ -707,7 +710,7 @@ impl DetectedBundle {
     ) -> (
         UnpackResult,
         Vec<Option<PreparedModuleAst>>,
-        std::collections::HashMap<String, DetectedModuleFailure>,
+        crate::collections::HashMap<String, DetectedModuleFailure>,
     ) {
         (self.result, self.prepared, self.module_failures)
     }
@@ -1305,7 +1308,7 @@ mod tests {
 
     #[test]
     fn runtime_local_name_uses_delimited_suffix() {
-        let mut used_names = std::collections::HashSet::from([Atom::from("_value")]);
+        let mut used_names = crate::collections::HashSet::from_iter([Atom::from("_value")]);
 
         assert_eq!(
             fresh_runtime_local_name(&Atom::from("value"), &mut used_names),

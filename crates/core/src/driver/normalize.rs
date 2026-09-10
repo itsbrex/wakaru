@@ -13,8 +13,8 @@
 //! keep distinct canonical names, so `load_backup(x)` and `load_meta(x)` never
 //! collapse to the same shape.
 
+use crate::collections::HashSet;
 use anyhow::Result;
-use std::collections::HashSet;
 
 use swc_core::common::{sync::Lrc, Mark, SourceMap, SyntaxContext, GLOBALS};
 use swc_core::ecma::ast::{Ident, Module};
@@ -83,7 +83,7 @@ pub fn normalize(source: &str, options: &NormalizeOptions) -> Result<String> {
 fn canonical_binding_renames(module: &Module, unresolved_mark: Mark) -> Vec<BindingRename> {
     let mut collector = BindingOrderCollector {
         unresolved_mark,
-        seen: HashSet::new(),
+        seen: HashSet::default(),
         order: Vec::new(),
     };
     module.visit_with(&mut collector);

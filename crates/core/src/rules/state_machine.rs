@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 use std::ops::Range;
 
 use swc_core::atoms::Atom;
@@ -99,7 +99,7 @@ impl CatchBindings {
                 self.0.insert(ident.sym.clone());
             }
         }
-        let mut names = Names(HashSet::new());
+        let mut names = Names(HashSet::default());
         for case in cases {
             case.visit_with(&mut names);
         }
@@ -739,7 +739,7 @@ fn continue_target_for_loop(
 }
 
 fn single_continue_target(stmts: &[Stmt], break_target: usize) -> Option<usize> {
-    let mut targets = HashSet::new();
+    let mut targets = HashSet::default();
     collect_jump_targets(stmts, &mut targets);
     targets.remove(&break_target);
     if targets.len() == 1 {

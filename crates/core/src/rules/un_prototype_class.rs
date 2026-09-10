@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::DUMMY_SP;
@@ -257,7 +257,7 @@ fn find_candidates(stmts: &[Option<&Stmt>], allow_module_var: bool) -> Vec<Class
     }
 
     // Collect the set of names that have prototype method assignments — this is the primary trigger
-    let mut names_with_proto_methods: HashSet<BindingKey> = HashSet::new();
+    let mut names_with_proto_methods: HashSet<BindingKey> = HashSet::default();
     for i in 0..len {
         let Some(stmt) = get_stmt(i) else { continue };
         let target = get_prototype_method_target(stmt).or_else(|| get_define_property_target(stmt));
@@ -273,7 +273,7 @@ fn find_candidates(stmts: &[Option<&Stmt>], allow_module_var: bool) -> Vec<Class
 
     // Phase 2: For each candidate, collect all associated statements
     let mut candidates = Vec::new();
-    let mut globally_consumed: HashSet<usize> = HashSet::new();
+    let mut globally_consumed: HashSet<usize> = HashSet::default();
 
     for (fn_idx, binding, constructor_kind) in &fn_decls {
         if !names_with_proto_methods.contains(binding) {
@@ -285,7 +285,7 @@ fn find_candidates(stmts: &[Option<&Stmt>], allow_module_var: bool) -> Vec<Class
         // - A chained inheritance expression (consumed, super class extracted)
         // Any other reference to the name → skip candidate entirely.
         let mut pre_ref_indices: Vec<usize> = Vec::new();
-        let mut pre_consumed_indices: HashSet<usize> = HashSet::new();
+        let mut pre_consumed_indices: HashSet<usize> = HashSet::default();
         let mut pre_super_class: Option<Box<Expr>> = None;
         let mut pre_super_class_name: Option<BindingKey> = None;
         let mut pre_class_name_value: Option<Atom> = None;
@@ -1516,7 +1516,7 @@ mod tests {
             binding: ("Foo".into(), Default::default()),
             super_class: None,
             super_class_binding: None,
-            consumed_indices: HashSet::new(),
+            consumed_indices: HashSet::default(),
             pre_ref_indices: Vec::new(),
             class_name_value: None,
             members: Vec::new(),

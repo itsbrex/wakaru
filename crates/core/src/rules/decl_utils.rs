@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Span, SyntaxContext, DUMMY_SP};
@@ -62,7 +62,7 @@ pub(crate) fn contains_use_strict_string_statement(body: &FunctionBody) -> bool 
 /// Duplicates are only legal in a simple (all-identifier) parameter list, so
 /// checking `Pat::Ident` syms is exhaustive.
 pub fn has_duplicate_param_names(params: &[Param]) -> bool {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     params.iter().any(
         |param| matches!(&param.pat, Pat::Ident(binding) if !seen.insert(binding.id.sym.clone())),
     )
@@ -119,7 +119,7 @@ pub(crate) enum ClassAccessorDescriptorAttributes {
 pub(crate) fn class_accessor_descriptor_attributes(
     descriptor: &ObjectLit,
 ) -> Option<ClassAccessorDescriptorAttributes> {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut has_accessor = false;
     let mut configurable = false;
     let mut enumerable = false;
@@ -197,7 +197,7 @@ fn dummy_setter_param_name(function: &Function) -> Atom {
         }
     }
 
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     function.visit_with(&mut Collector { names: &mut names });
     for candidate in ["_", "_v", "_0", "_1", "_2"] {
         let atom: Atom = candidate.into();

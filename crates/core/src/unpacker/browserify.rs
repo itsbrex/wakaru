@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
+use std::collections::BTreeMap;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{sync::Lrc, Globals, Mark, SourceMap, Spanned, SyntaxContext, GLOBALS};
@@ -242,10 +243,10 @@ fn collect_factory_modules(
         let dependencies = match strip_parens(dependencies_expr) {
             Expr::Object(dependencies) => match extract_dependency_map(dependencies) {
                 Some(dependencies) => dependencies,
-                None if dialect == TableDialect::Browserify => HashMap::new(),
+                None if dialect == TableDialect::Browserify => HashMap::default(),
                 None => return None,
             },
-            _ if dialect == TableDialect::Browserify => HashMap::new(),
+            _ if dialect == TableDialect::Browserify => HashMap::default(),
             _ => return None,
         };
 
@@ -301,7 +302,7 @@ fn extract_entry_ids(entries: &ArrayLit) -> Option<Vec<ModuleId>> {
 }
 
 fn extract_dependency_map(object: &ObjectLit) -> Option<HashMap<String, ModuleId>> {
-    let mut dependencies = HashMap::new();
+    let mut dependencies = HashMap::default();
     for property in &object.props {
         let PropOrSpread::Prop(property) = property else {
             return None;
@@ -345,7 +346,7 @@ fn assign_filenames(
     dialect: TableDialect,
 ) {
     let entry_set: HashSet<&ModuleId> = entries.iter().collect();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
 
     if dialect == TableDialect::CocosCreator2 {
         for module in modules {
@@ -387,7 +388,7 @@ fn browserify_filename_hints(modules: &[FactoryModule<'_>]) -> HashMap<ModuleId,
         .iter()
         .map(|module| module.id.clone())
         .collect::<HashSet<_>>();
-    let mut candidates: HashMap<ModuleId, BTreeMap<String, String>> = HashMap::new();
+    let mut candidates: HashMap<ModuleId, BTreeMap<String, String>> = HashMap::default();
 
     for module in modules {
         for (request, target) in &module.dependencies {

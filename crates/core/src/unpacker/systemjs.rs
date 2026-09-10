@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 
 use swc_core::atoms::Atom;
 use swc_core::common::{
@@ -50,7 +50,7 @@ pub(super) fn detect_from_module(module: &Module, cm: Lrc<SourceMap>) -> Option<
     }
 
     let multiple = registers.len() > 1;
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut modules = Vec::new();
     for (idx, register) in registers.into_iter().enumerate() {
         let register_range = span_byte_range(&cm, register.span);
@@ -411,7 +411,7 @@ fn emit_system_module(
         Some(export_sym) => {
             collect_member_export_binding_names(&lifted_stmts, export_sym, &export_call_spans)
         }
-        None => HashSet::new(),
+        None => HashSet::default(),
     };
     direct_binding_candidates.extend(seen_export_names.into_iter().filter(|name| {
         name.as_ref() != "default"
@@ -425,7 +425,7 @@ fn emit_system_module(
             export_sym,
             &export_call_spans,
         ),
-        None => HashSet::new(),
+        None => HashSet::default(),
     };
     let needs_unresolved_analysis = (!direct_binding_candidates.is_empty()
         && (direct_binding_candidates
@@ -434,12 +434,12 @@ fn emit_system_module(
             || used_names.names.iter().any(|name| name.as_ref() == "eval")))
         || !default_iife_return_idents.is_empty();
     let unresolved_analysis = if needs_unresolved_analysis {
-        analyze_unresolved_names(&lifted_stmts, &HashSet::new())
+        analyze_unresolved_names(&lifted_stmts, &HashSet::default())
     } else {
         UnresolvedNameAnalysis::default()
     };
     let (temp_local_unresolved, temp_local_proof_ready) = if default_iife_return_idents.is_empty() {
-        (HashSet::new(), false)
+        (HashSet::default(), false)
     } else {
         let parsed_export_call_spans = collect_parsed_export_call_spans(
             transformed_stmts,
@@ -679,7 +679,7 @@ fn analyze_unresolved_names(
 
         let mut collector = UnresolvedNameCollector {
             unresolved_ctxt: SyntaxContext::empty().apply_mark(unresolved_mark),
-            names: HashSet::new(),
+            names: HashSet::default(),
             has_direct_eval: false,
             skip_export_call_spans: skip_export_call_spans.clone(),
         };
@@ -785,7 +785,7 @@ fn collect_export_call_spans(declare: &Function, export_sym: &Atom) -> HashSet<S
         let mut collector = ExportCallSpanCollector {
             export_sym,
             export_ctxt,
-            spans: HashSet::new(),
+            spans: HashSet::default(),
         };
         probe.visit_with(&mut collector);
         collector.spans
@@ -827,7 +827,7 @@ fn collect_export_name_usage(
     let mut collector = ExportNameUseCollector {
         export_sym,
         export_call_spans,
-        uses: HashMap::new(),
+        uses: HashMap::default(),
         order: Vec::new(),
     };
     for stmt in stmts {
@@ -902,7 +902,7 @@ fn collect_member_export_binding_names(
     let mut collector = MemberExportBindingNameCollector {
         export_sym,
         export_call_spans,
-        names: HashSet::new(),
+        names: HashSet::default(),
     };
     for stmt in stmts {
         stmt.visit_with(&mut collector);
@@ -954,7 +954,7 @@ fn collect_default_iife_member_return_idents(
     let mut collector = DefaultIifeMemberReturnCollector {
         export_sym,
         export_call_spans,
-        names: HashSet::new(),
+        names: HashSet::default(),
     };
     for stmt in stmts {
         stmt.visit_with(&mut collector);
@@ -973,7 +973,7 @@ fn collect_parsed_export_call_spans(
     let mut collector = ParsedExportCallSpanCollector {
         export_sym,
         export_call_spans,
-        parsed: HashSet::new(),
+        parsed: HashSet::default(),
     };
     for stmt in stmts {
         stmt.visit_with(&mut collector);
@@ -1666,15 +1666,15 @@ impl SystemExecuteTransformer {
             export_sym,
             context_sym,
             exports: Vec::new(),
-            declared_exports: HashSet::new(),
+            declared_exports: HashSet::default(),
             used_names,
             module_bound_names,
             unresolved_names,
             has_direct_eval,
             export_call_spans,
-            temp_local_unresolved: HashSet::new(),
+            temp_local_unresolved: HashSet::default(),
             temp_local_proof_ready: false,
-            mutable_export_bindings: HashMap::new(),
+            mutable_export_bindings: HashMap::default(),
             pending_expr_export_decls: Vec::new(),
             unlowerable_export: false,
             leftover_export_call: false,

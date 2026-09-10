@@ -18,10 +18,8 @@
 //! (it re-exports an external package or a missing module) suppresses
 //! missing-name findings for its consumers rather than guessing.
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-};
+use crate::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use swc_core::common::{sync::Lrc, FileName, Mark, SourceMap, Span, Spanned, GLOBALS};
 use swc_core::ecma::ast::{
@@ -168,7 +166,7 @@ fn validate_inner(modules: &[(String, String)], inputs: &[(String, String)]) -> 
                 &info_by_filename,
                 import.target.as_str(),
                 &import.name,
-                &mut HashSet::new(),
+                &mut HashSet::default(),
             );
             let detail = match resolution {
                 ResolvedExport::Ambiguous => Some(format!(
@@ -225,7 +223,7 @@ fn unresolved_reference_findings(
     infos: &[ModuleInfo],
     inputs: &[(String, String)],
 ) -> Vec<OutputFinding> {
-    let mut declaring_modules: HashMap<&Atom, Vec<&str>> = HashMap::new();
+    let mut declaring_modules: HashMap<&Atom, Vec<&str>> = HashMap::default();
     for info in infos {
         for name in &info.module_scope_names {
             declaring_modules
@@ -239,7 +237,7 @@ fn unresolved_reference_findings(
     // A partial baseline proves nothing: if any input fails to parse, report
     // that and skip the input comparison rather than call names absent from
     // a file that was never read.
-    let mut input_free_names = (!inputs.is_empty()).then(HashSet::new);
+    let mut input_free_names = (!inputs.is_empty()).then(HashSet::default);
     for (filename, source) in inputs {
         match collect_input_free_names(filename, source) {
             Ok(names) => {
@@ -702,14 +700,14 @@ fn analyze_module(
     let mut info = ModuleInfo {
         filename: filename.to_string(),
         explicit_exports: Vec::new(),
-        explicit_resolutions: HashMap::new(),
+        explicit_resolutions: HashMap::default(),
         star_targets: Vec::new(),
         open_exports: false,
         named_imports: Vec::new(),
-        module_scope_names: HashSet::new(),
+        module_scope_names: HashSet::default(),
         unresolved_refs: Vec::new(),
     };
-    let mut import_bindings: HashMap<Id, Atom> = HashMap::new();
+    let mut import_bindings: HashMap<Id, Atom> = HashMap::default();
 
     // ESM resolves a local export of an imported binding to the *source*
     // module's binding, so `import { x } from "./a.js"; export { x };` and
@@ -717,7 +715,7 @@ fn analyze_module(
     // to that indirect resolution up front (exports may precede imports in
     // the body). External and dangling specifiers keep their raw text, which
     // `resolve_export` treats as an unknown provider.
-    let mut import_reexports: HashMap<Id, ExplicitExportResolution> = HashMap::new();
+    let mut import_reexports: HashMap<Id, ExplicitExportResolution> = HashMap::default();
     for item in &module.body {
         let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
             continue;
@@ -931,8 +929,8 @@ fn analyze_module(
         }
     }
 
-    let mut duplicates_seen: HashSet<Atom> = HashSet::new();
-    let mut counted: HashSet<Atom> = HashSet::new();
+    let mut duplicates_seen: HashSet<Atom> = HashSet::default();
+    let mut counted: HashSet<Atom> = HashSet::default();
     for export in &info.explicit_exports {
         if !counted.insert(export.name.clone()) && duplicates_seen.insert(export.name.clone()) {
             findings.push(OutputFinding {
@@ -954,7 +952,7 @@ fn analyze_module(
     }
 
     let mut const_collector = ConstBindingCollector {
-        bindings: HashMap::new(),
+        bindings: HashMap::default(),
     };
     module.visit_with(&mut const_collector);
 
@@ -1471,7 +1469,7 @@ fn duplicate_declaration_findings(
         filename,
         source_map,
         findings: Vec::new(),
-        reported_locations: HashSet::new(),
+        reported_locations: HashSet::default(),
     };
     visitor.check_scope(bindings, "module-scope");
     module.visit_children_with(&mut visitor);
@@ -1665,8 +1663,8 @@ struct DuplicateDeclarationVisitor<'a> {
 impl DuplicateDeclarationVisitor<'_> {
     fn check_scope(&mut self, mut bindings: Vec<ScopeBinding>, scope: &str) {
         bindings.sort_by_key(|binding| binding.span.lo);
-        let mut first_kinds: HashMap<Atom, DeclarationKind> = HashMap::new();
-        let mut reported_names = HashSet::new();
+        let mut first_kinds: HashMap<Atom, DeclarationKind> = HashMap::default();
+        let mut reported_names = HashSet::default();
         for binding in bindings {
             let Some(first_kind) = first_kinds.get(&binding.name).copied() else {
                 first_kinds.insert(binding.name.clone(), binding.kind);

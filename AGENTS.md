@@ -125,6 +125,13 @@ declaration kind of the statements you consumed (or `var`) — never hardcode
 analysis, and it never widens an existing `const`, so a hardcoded `const` on a
 binding that is later reassigned becomes a runtime `TypeError`.
 
+### Hash tables
+
+Inside `wakaru-core`, import `crate::collections::{HashMap, HashSet}` (the
+standard types with `FxHasher`) instead of `std::collections`. Construct them
+with `HashMap::default()`; `HashMap::new()` does not exist for a non-default
+hasher. See `docs/architecture.md`.
+
 ### Function bodies are not blocks
 
 Since swc_core 77, function/method/constructor/accessor bodies (and

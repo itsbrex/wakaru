@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::common::Mark;
 use swc_core::ecma::ast::{
@@ -232,7 +232,7 @@ fn collect_to_array_bindings(
     module: &Module,
     unresolved_mark: Option<Mark>,
 ) -> HashSet<BindingKey> {
-    let mut bindings = HashSet::new();
+    let mut bindings = HashSet::default();
 
     for item in &module.body {
         match item {
@@ -364,7 +364,7 @@ fn helper_dependency_closure(
     roots: &HashSet<BindingKey>,
     candidate_decls: &[(BindingKey, HashSet<BindingKey>)],
 ) -> HashSet<BindingKey> {
-    let mut reachable = HashSet::new();
+    let mut reachable = HashSet::default();
     let mut stack: Vec<_> = roots.iter().cloned().collect();
 
     while let Some(key) = stack.pop() {

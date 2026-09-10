@@ -8,7 +8,7 @@
 //! SystemJS unpacker also share. Emission that needs source maps goes
 //! through `emit_module_with_source_map` in `unpacker/mod.rs` instead.
 
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{sync::Lrc, FileName, SourceMap};

@@ -6,7 +6,7 @@
 //! proof, so these rewrites are enabled only by detector-owned module metadata
 //! and never run for raw output.
 
-use std::collections::HashSet;
+use crate::collections::HashSet;
 
 use swc_core::atoms::Atom;
 use swc_core::common::{Mark, Span, SyntaxContext, DUMMY_SP};
@@ -372,7 +372,7 @@ fn module_identity_surface_is_stable(module: &Module, unresolved_mark: Mark) -> 
     let uses = BindingUseIndex::collect(module);
     let mut bindings = UnresolvedModuleBindingCollector {
         unresolved_mark,
-        ids: HashSet::new(),
+        ids: HashSet::default(),
     };
     module.visit_with(&mut bindings);
     bindings.ids.iter().all(|binding| {
