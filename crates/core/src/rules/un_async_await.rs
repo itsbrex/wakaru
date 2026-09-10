@@ -415,9 +415,9 @@ fn extract_generator_stmts(stmt: Stmt, helpers: &AsyncHelperContext) -> Option<E
     let Expr::Fn(fn_expr) = fn_arg else {
         return None;
     };
-    let state_name: Atom = fn_expr.function.params.first().and_then(|p| {
+    let state_param: Ident = fn_expr.function.params.first().and_then(|p| {
         if let Pat::Ident(bi) = &p.pat {
-            Some(bi.id.sym.clone())
+            Some(bi.id.clone())
         } else {
             None
         }
@@ -445,7 +445,7 @@ fn extract_generator_stmts(stmt: Stmt, helpers: &AsyncHelperContext) -> Option<E
         }
     }
     let decoded = match state_stmt? {
-        Stmt::Switch(sw) => decode_state_machine(state_name, sw.cases, helpers)?,
+        Stmt::Switch(sw) => decode_state_machine(state_param, sw.cases, helpers)?,
         Stmt::Return(ret) => decode_return_opcode(&Stmt::Return(ret), helpers)?
             .into_iter()
             .collect(),
@@ -980,7 +980,7 @@ fn unwrap_seq_last(expr: &Expr) -> &Expr {
 ///
 /// Phase 3: Group by label and reconstruct try/catch/finally blocks.
 fn decode_state_machine(
-    state_name: Atom,
+    state_param: Ident,
     cases: Vec<SwitchCase>,
     helpers: &AsyncHelperContext,
 ) -> Option<Vec<Stmt>> {
@@ -997,11 +997,11 @@ fn decode_state_machine(
 
         let expanded = expand_terser_case_stmts(&case.cons);
         for stmt in &expanded {
-            if let Some(region) = extract_trys_push(&state_name, stmt) {
+            if let Some(region) = extract_trys_push(&state_param, stmt) {
                 trys.push(region);
                 continue;
             }
-            if is_state_label_assign(&state_name, stmt) {
+            if is_state_label_assign(&state_param, stmt) {
                 continue;
             }
 
@@ -1026,12 +1026,12 @@ fn decode_state_machine(
     let mut catch_aliases: Vec<BindingKey> = Vec::new();
     let folded_aliases: HashSet<Atom> = flat
         .iter()
-        .filter_map(|(_, stmt)| catch_sent_alias(&state_name, stmt))
+        .filter_map(|(_, stmt)| catch_sent_alias(&state_param, stmt))
         .map(|(name, _)| name)
         .collect();
     let mut catch_bindings = CatchBindings::for_cases(&cases, &folded_aliases);
     for (idx, stmt) in flat {
-        if is_standalone_sent(&state_name, &stmt) {
+        if is_standalone_sent(&state_param, &stmt) {
             // Standalone _a.sent(); -- the caller discards the yielded value. Drop.
             continue;
         }
@@ -1042,13 +1042,13 @@ fn decode_state_machine(
         if let Some(catch_binding) = &catch_binding {
             // `error_1 = _a.sent()` aliases the caught value. Record it and drop
             // the assignment; later references resolve to the `error` binding.
-            if let Some(alias) = catch_sent_alias(&state_name, &stmt) {
+            if let Some(alias) = catch_sent_alias(&state_param, &stmt) {
                 catch_aliases.push(alias);
                 continue;
             }
             // Rewrite both `_a.sent()` and any recorded alias to `error`.
             let mut replacer = CatchValueReplacer {
-                state_name: state_name.clone(),
+                state_param: state_param.clone(),
                 aliases: catch_aliases.clone(),
                 replacement: Box::new(Expr::Ident(catch_binding.clone())),
             };
@@ -1057,9 +1057,9 @@ fn decode_state_machine(
             output.push((idx, s));
             continue;
         }
-        if stmt_uses_sent(&state_name, &stmt) {
+        if stmt_uses_sent(&state_param, &stmt) {
             if let Some((_, prev)) = output.last() {
-                if let Some(split) = split_sent_consuming_stmt(&state_name, &stmt, prev) {
+                if let Some(split) = split_sent_consuming_stmt(&state_param, &stmt, prev) {
                     output.pop();
                     output.extend(split.into_iter().map(|stmt| (idx, stmt)));
                     continue;
@@ -1074,7 +1074,7 @@ fn decode_state_machine(
                         arg: Some(arg),
                     }));
                     let mut replacer = SentReplacer {
-                        state_name: state_name.clone(),
+                        state_param: state_param.clone(),
                         replacement: yield_expr,
                     };
                     let mut s = stmt.clone();
@@ -1090,7 +1090,7 @@ fn decode_state_machine(
             } else {
                 // No previous yield -- replace sent with undefined
                 let mut replacer = SentReplacer {
-                    state_name: state_name.clone(),
+                    state_param: state_param.clone(),
                     replacement: Box::new(Expr::Ident(Ident::new_no_ctxt(
                         "undefined".into(),
                         DUMMY_SP,
@@ -1137,7 +1137,7 @@ fn extract_yield_from_stmt(stmt: &Stmt) -> Option<(Box<Expr>, bool, Span)> {
     None
 }
 
-fn split_sent_consuming_stmt(state_name: &Atom, stmt: &Stmt, prev: &Stmt) -> Option<Vec<Stmt>> {
+fn split_sent_consuming_stmt(state_param: &Ident, stmt: &Stmt, prev: &Stmt) -> Option<Vec<Stmt>> {
     let (arg, delegate, yield_span) = extract_yield_from_stmt(prev)?;
     let stmt_span = stmt.span();
     let yielded = Box::new(Expr::Yield(YieldExpr {
@@ -1146,7 +1146,7 @@ fn split_sent_consuming_stmt(state_name: &Atom, stmt: &Stmt, prev: &Stmt) -> Opt
         arg: Some(arg),
     }));
 
-    if let Some((left, followup)) = split_yield_arg_sent_assignment(state_name, stmt) {
+    if let Some((left, followup)) = split_yield_arg_sent_assignment(state_param, stmt) {
         return Some(vec![
             assign_stmt(left, yielded, stmt_span),
             Stmt::Expr(ExprStmt {
@@ -1160,7 +1160,7 @@ fn split_sent_consuming_stmt(state_name: &Atom, stmt: &Stmt, prev: &Stmt) -> Opt
         ]);
     }
 
-    if let Some((left, returned)) = split_return_sent_assignment(state_name, stmt) {
+    if let Some((left, returned)) = split_return_sent_assignment(state_param, stmt) {
         return Some(vec![
             assign_stmt(left, yielded, stmt_span),
             Stmt::Return(swc_core::ecma::ast::ReturnStmt {
@@ -1174,7 +1174,7 @@ fn split_sent_consuming_stmt(state_name: &Atom, stmt: &Stmt, prev: &Stmt) -> Opt
 }
 
 fn split_yield_arg_sent_assignment(
-    state_name: &Atom,
+    state_param: &Ident,
     stmt: &Stmt,
 ) -> Option<(AssignTarget, Box<Expr>)> {
     let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
@@ -1197,7 +1197,7 @@ fn split_yield_arg_sent_assignment(
     let Expr::Assign(assign) = strip_parens(&member.obj) else {
         return None;
     };
-    if assign.op != AssignOp::Assign || !is_sent_call(state_name, &assign.right) {
+    if assign.op != AssignOp::Assign || !is_sent_call(state_param, &assign.right) {
         return None;
     }
     let AssignTarget::Simple(SimpleAssignTarget::Ident(left)) = &assign.left else {
@@ -1213,7 +1213,7 @@ fn split_yield_arg_sent_assignment(
 }
 
 fn split_return_sent_assignment(
-    state_name: &Atom,
+    state_param: &Ident,
     stmt: &Stmt,
 ) -> Option<(AssignTarget, Box<Expr>)> {
     let Stmt::Return(ret) = stmt else {
@@ -1222,7 +1222,7 @@ fn split_return_sent_assignment(
     let Expr::Assign(assign) = ret.arg.as_deref()? else {
         return None;
     };
-    if assign.op != AssignOp::Assign || !is_sent_call(state_name, &assign.right) {
+    if assign.op != AssignOp::Assign || !is_sent_call(state_param, &assign.right) {
         return None;
     }
     let AssignTarget::Simple(SimpleAssignTarget::Ident(left)) = &assign.left else {
@@ -1243,42 +1243,39 @@ fn assign_stmt(left: AssignTarget, right: Box<Expr>, span: Span) -> Stmt {
     })
 }
 
-fn is_sent_call(state_name: &Atom, expr: &Expr) -> bool {
+fn is_sent_call(state_param: &Ident, expr: &Expr) -> bool {
     let Expr::Call(call) = expr else {
         return false;
     };
     let Some(mem) = call.callee.as_expr().and_then(|e| e.as_member()) else {
         return false;
     };
-    matches!(mem.obj.as_ref(), Expr::Ident(id) if id.sym == *state_name)
-        && is_ident_prop(&mem.prop, "sent")
+    is_state_param_ref(&mem.obj, state_param) && is_ident_prop(&mem.prop, "sent")
 }
 
 /// Match `ident = _a.sent()` inside a catch region, returning the aliased
 /// local binding. TSC stores the caught value in a function-scoped temp before
 /// using it; we fold that temp into the reconstructed catch binding.
-fn catch_sent_alias(state_name: &Atom, stmt: &Stmt) -> Option<BindingKey> {
+fn catch_sent_alias(state_param: &Ident, stmt: &Stmt) -> Option<BindingKey> {
     let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
         return None;
     };
     let Expr::Assign(assign) = expr.as_ref() else {
         return None;
     };
-    if assign.op != AssignOp::Assign || !is_sent_call(state_name, &assign.right) {
+    if assign.op != AssignOp::Assign || !is_sent_call(state_param, &assign.right) {
         return None;
     }
     let ident = assign.left.as_simple()?.as_ident()?;
     Some(binding_key(&ident.id))
 }
 
-fn is_standalone_sent(state_name: &Atom, stmt: &Stmt) -> bool {
+fn is_standalone_sent(state_param: &Ident, stmt: &Stmt) -> bool {
     if let Stmt::Expr(ExprStmt { expr, .. }) = stmt {
         if let Expr::Call(call) = expr.as_ref() {
             if let Some(mem) = call.callee.as_expr().and_then(|e| e.as_member()) {
-                if let Expr::Ident(id) = mem.obj.as_ref() {
-                    if id.sym == *state_name && is_ident_prop(&mem.prop, "sent") {
-                        return true;
-                    }
+                if is_state_param_ref(&mem.obj, state_param) && is_ident_prop(&mem.prop, "sent") {
+                    return true;
                 }
             }
         }
@@ -1303,7 +1300,7 @@ fn next_numeric_case_label(cases: &[SwitchCase], current: usize) -> Option<usize
         .min()
 }
 
-fn extract_trys_push(state_name: &Atom, stmt: &Stmt) -> Option<[Option<usize>; 4]> {
+fn extract_trys_push(state_param: &Ident, stmt: &Stmt) -> Option<[Option<usize>; 4]> {
     // _a.trys.push([s, c, f, n])
     let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
         return None;
@@ -1320,7 +1317,7 @@ fn extract_trys_push(state_name: &Atom, stmt: &Stmt) -> Option<[Option<usize>; 4
     let Expr::Ident(obj_id) = outer_mem.obj.as_ref() else {
         return None;
     };
-    if obj_id.sym != *state_name {
+    if obj_id.sym != state_param.sym || obj_id.ctxt != state_param.ctxt {
         return None;
     }
     if !is_ident_prop(&outer_mem.prop, "trys") {
@@ -1366,7 +1363,7 @@ fn is_try_region_exit(label: usize, target: usize, trys: &[[Option<usize>; 4]]) 
     })
 }
 
-fn is_state_label_assign(state_name: &Atom, stmt: &Stmt) -> bool {
+fn is_state_label_assign(state_param: &Ident, stmt: &Stmt) -> bool {
     let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
         return false;
     };
@@ -1379,7 +1376,9 @@ fn is_state_label_assign(state_name: &Atom, stmt: &Stmt) -> bool {
     let Expr::Ident(id) = left_expr.obj.as_ref() else {
         return false;
     };
-    id.sym == *state_name && is_ident_prop(&left_expr.prop, "label")
+    id.sym == state_param.sym
+        && id.ctxt == state_param.ctxt
+        && is_ident_prop(&left_expr.prop, "label")
 }
 
 /// Returns `Some(Some(stmt))` if an opcode-based return was decoded,
@@ -1527,9 +1526,9 @@ fn unwrap_ts_values(expr: Box<Expr>, helpers: &AsyncHelperContext) -> Box<Expr> 
     expr
 }
 
-fn stmt_uses_sent(state_name: &Atom, stmt: &Stmt) -> bool {
+fn stmt_uses_sent(state_param: &Ident, stmt: &Stmt) -> bool {
     struct Finder {
-        state_name: Atom,
+        state_param: Ident,
         found: bool,
     }
     impl swc_core::ecma::visit::Visit for Finder {
@@ -1539,18 +1538,18 @@ fn stmt_uses_sent(state_name: &Atom, stmt: &Stmt) -> bool {
 
         fn visit_call_expr(&mut self, call: &swc_core::ecma::ast::CallExpr) {
             if let Some(mem) = call.callee.as_expr().and_then(|e| e.as_member()) {
-                if let Expr::Ident(id) = mem.obj.as_ref() {
-                    if id.sym == self.state_name && is_ident_prop(&mem.prop, "sent") {
-                        self.found = true;
-                        return;
-                    }
+                if is_state_param_ref(&mem.obj, &self.state_param)
+                    && is_ident_prop(&mem.prop, "sent")
+                {
+                    self.found = true;
+                    return;
                 }
             }
             call.visit_children_with(self);
         }
     }
     let mut f = Finder {
-        state_name: state_name.clone(),
+        state_param: state_param.clone(),
         found: false,
     };
     swc_core::ecma::visit::VisitWith::visit_with(stmt, &mut f);
@@ -1558,7 +1557,7 @@ fn stmt_uses_sent(state_name: &Atom, stmt: &Stmt) -> bool {
 }
 
 struct SentReplacer {
-    state_name: Atom,
+    state_param: Ident,
     replacement: Box<Expr>,
 }
 
@@ -1570,11 +1569,11 @@ impl VisitMut for SentReplacer {
     fn visit_mut_expr(&mut self, expr: &mut Expr) {
         if let Expr::Call(call) = expr {
             if let Some(mem) = call.callee.as_expr().and_then(|e| e.as_member()) {
-                if let Expr::Ident(id) = mem.obj.as_ref() {
-                    if id.sym == self.state_name && is_ident_prop(&mem.prop, "sent") {
-                        *expr = *self.replacement.clone();
-                        return;
-                    }
+                if is_state_param_ref(&mem.obj, &self.state_param)
+                    && is_ident_prop(&mem.prop, "sent")
+                {
+                    *expr = *self.replacement.clone();
+                    return;
                 }
             }
         }
@@ -1585,7 +1584,7 @@ impl VisitMut for SentReplacer {
 /// Replaces `_a.sent()` and any recorded catch-temp aliases with the catch
 /// binding inside a reconstructed catch body.
 struct CatchValueReplacer {
-    state_name: Atom,
+    state_param: Ident,
     aliases: Vec<BindingKey>,
     replacement: Box<Expr>,
 }
@@ -1598,11 +1597,11 @@ impl VisitMut for CatchValueReplacer {
     fn visit_mut_expr(&mut self, expr: &mut Expr) {
         if let Expr::Call(call) = expr {
             if let Some(mem) = call.callee.as_expr().and_then(|e| e.as_member()) {
-                if let Expr::Ident(id) = mem.obj.as_ref() {
-                    if id.sym == self.state_name && is_ident_prop(&mem.prop, "sent") {
-                        *expr = *self.replacement.clone();
-                        return;
-                    }
+                if is_state_param_ref(&mem.obj, &self.state_param)
+                    && is_ident_prop(&mem.prop, "sent")
+                {
+                    *expr = *self.replacement.clone();
+                    return;
                 }
             }
         }
@@ -2731,6 +2730,12 @@ fn is_valid_param_hint(value: &str) -> bool {
 // ============================================================
 // Helpers
 // ============================================================
+
+/// The state callback's parameter by resolver identity: a nested function
+/// whose parameter shares the spelling is a different binding.
+fn is_state_param_ref(expr: &Expr, state_param: &Ident) -> bool {
+    matches!(expr, Expr::Ident(id) if id.sym == state_param.sym && id.ctxt == state_param.ctxt)
+}
 
 fn is_ident_prop(prop: &swc_core::ecma::ast::MemberProp, name: &str) -> bool {
     matches!(prop, swc_core::ecma::ast::MemberProp::Ident(n) if n.sym.as_str() == name)

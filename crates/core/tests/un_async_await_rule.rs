@@ -248,6 +248,40 @@ function* func() {
 }
 
 #[test]
+fn block_binding_sharing_the_state_name_keeps_its_own_sent_call() {
+    // Unlike nested functions, blocks are traversed by the sent finder and
+    // replacer. Their local `_a` must not consume the preceding yield.
+    let input = r#"
+function func() {
+  return __generator(this, function (_a) {
+    switch (_a.label) {
+      case 0:
+        return [4 /*yield*/, load()];
+      case 1:
+        _a.sent();
+        {
+          let _a = item;
+          use(_a.sent());
+        }
+        return [2 /*return*/];
+    }
+  });
+}
+"#;
+    let expected = r#"
+function* func() {
+  yield load();
+  {
+    let _a = item;
+    use(_a.sent());
+  }
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
 fn generator_preserves_callback_locals_declared_after_state_switch() {
     let input = r#"
 const localValue = "module";

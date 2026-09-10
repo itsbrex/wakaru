@@ -2527,6 +2527,81 @@ function myGen(cond) {
 }
 
 #[test]
+fn nested_callback_param_sharing_the_state_name_is_not_state_control_flow() {
+    // The callback's `e` is a different binding from the state parameter `e`.
+    // Its `.next` assignment inside the `if` block is ordinary code, not a
+    // state jump, so the generator must still be recovered.
+    let input = r#"
+var _marked = regeneratorRuntime.mark(myGen);
+function myGen(items) {
+  return regeneratorRuntime.wrap(function(e) {
+    while (true) {
+      switch (e.prev = e.next) {
+        case 0:
+          if (items) {
+            items.forEach(function(e) {
+              e.next = null;
+            });
+          }
+          e.next = 3;
+          return first;
+        case 3:
+        case "end":
+          return e.stop();
+      }
+    }
+  }, _marked, this);
+}
+"#;
+    let expected = r#"
+function* myGen(items) {
+  if (items) {
+    items.forEach(function(e) {
+      e.next = null;
+    });
+  }
+  yield first;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn nested_callback_param_sharing_the_state_name_is_not_a_catch_call() {
+    // `e.catch(noop)` belongs to the callback's own `e`, so the missing
+    // try-region table does not block recovery.
+    let input = r#"
+var _marked = regeneratorRuntime.mark(myGen);
+function myGen(promise) {
+  return regeneratorRuntime.wrap(function(e) {
+    while (true) {
+      switch (e.prev = e.next) {
+        case 0:
+          e.next = 2;
+          return promise.then(function(e) {
+            return e.catch(noop);
+          });
+        case 2:
+        case "end":
+          return e.stop();
+      }
+    }
+  }, _marked, this);
+}
+"#;
+    let expected = r#"
+function* myGen(promise) {
+  yield promise.then(function(e) {
+    return e.catch(noop);
+  });
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
 fn bail_on_async_to_gen_with_inner_params() {
     // _asyncToGenerator wrapping a function with params is not real Babel output.
     // Transforming it would drop the params and leave unbound references.
