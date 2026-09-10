@@ -1,15 +1,21 @@
 # Learning: what moved the needle in the September 2026 performance round, and what did not
 
-**TL;DR — Three changes were kept: move untouched statements instead of
+**TL;DR — Five changes were kept: move untouched statements instead of
 cloning them when a rule rebuilds a statement list, run a cheap local shape
-check before building a whole-module `BindingUseIndex`, and install mimalloc
-in the CLI binary. Together they cut end-to-end time on medium and large
-bundles by roughly 35–40% on an Apple M2 Max, with byte-identical output.
-Three ideas were tried and rejected: skipping the index for temporary-binding
-proofs, an esbuild AST handoff (and its parallel-emit fallback), and
-reordering the `SimplifySequence2` side-effect check. Do not re-measure
-these without a new angle. Measure with alternating AB/BA runs; sequential
-batches produced 2–3% "gains" that vanished when the order was alternated.**
+check before building a whole-module `BindingUseIndex`, install mimalloc in
+the CLI binary, dispatch modules largest-first in both unpack phases, and hash
+internal binding tables with `FxHasher`. Measured together in one session
+against the `main` they were based on, with alternating AB/BA pairs, they cut
+end-to-end time on medium bundles by 27–29% and on a large esbuild bundle by
+42% on an Apple M2 Max, with byte-identical output and 6–50 MiB more peak RSS.
+Four ideas were tried and rejected: skipping the index for temporary-binding
+proofs, an esbuild AST handoff (and its parallel-emit fallback), reordering the
+`SimplifySequence2` side-effect check, and gating Phase 1 fact recovery on
+IIFE presence. Do not re-measure these without a new angle. Measure with
+alternating AB/BA runs, and not right after a long build: sequential batches
+produced 2–3% "gains" that vanished when the order was alternated, and a
+batch started minutes after two fat-LTO builds showed 8–50% run-to-run spread
+that a short cooldown removed.**
 
 ## What worked
 
@@ -47,6 +53,28 @@ deliberately confined to the executable; the `wakaru` façade, core, and WASM
 crates leave the choice to their callers. swc's own `swc_malloc` makes the
 same choice on the platforms Wakaru ships to; its jemalloc and system-allocator
 fallbacks exist for armv7 and musl, which Wakaru does not build.
+
+**4. Dispatch the largest modules first.** Both unpack phases mapped modules
+with `par_iter`, whose recursive range splitting can start the largest module
+after most workers have gone idle, so one module becomes the critical path.
+Sorting by source length and pulling through `par_bridge` (longest-processing-
+time-first) lifted the Phase 2 parallel speedup on the large bundle from about
+7x to 11.5x on 12 cores, a 20% wall-time cut, with results re-sorted to input
+order so scheduling never reaches the output. It does nothing for a bundle
+whose single largest module already dominates; only making that module's rules
+cheaper helps there.
+
+**5. `FxHasher` for internal tables.** A CPU sample after the allocator change
+put SipHash and hashbrown lookups at about 15% of compute; two thirds of it
+sat in `binding_uses`, `un_optional_chaining`, `smart_rename`, and
+`rename_utils`, all keyed by `(Atom, SyntaxContext)`. Those keys already hash
+to a precomputed word, so the keyed rounds bought nothing. Routing every
+internal table through `crate::collections::{HashMap, HashSet}` took a further
+9–10% off the medium bundles and 6% off the large one. Iteration order was
+never observable (the default hasher is seeded per process), so the swap
+changes cost, not results. Swapping only the hot files does not work: the
+sets cross function boundaries everywhere, and the type mismatches force the
+crate-wide alias anyway.
 
 ## What did not work
 
@@ -105,6 +133,19 @@ each pass on its own trigger or to leave the recovery alone.
 
 ## Remaining leads
 
-After these changes the largest accumulated rule sums on the biggest bundle
-were `SimplifySequence2` and `SmartRename`, followed by bundle intake and
-output writing. None of those was changed in this round.
+- Output writing: after the changes above, roughly a third of busy CPU
+  samples on the large bundle were threads blocked in `open`/`close`/`write`
+  while creating thousands of output files, about half a second of wall time
+  that runs after Phase 2 instead of overlapping it. Writing each module as it
+  finishes would hide most of it; the cost is error-handling semantics and the
+  `write_if_changed` path.
+- Few-module bundles: one module can hold 60% of Phase 2 CPU, and `UnEsm`,
+  `UnObjectRest`, `UnComputedProperties`, and `UnObjectSpread` each spend tens
+  of milliseconds on it. Profile that module alone for superlinear behavior
+  before touching the rules.
+- esbuild intake: `detect_esbuild` is still single-threaded and about a quarter
+  of the large bundle's wall time; scope-hoisted extraction is per-group and
+  independent, emission is blocked by `Lrc<SourceMap>` not being `Sync`.
+- Accumulated rule sums on the large bundle are now flat (the top rule is
+  about 7%); further per-rule work has diminishing returns compared with the
+  cross-cutting items above.

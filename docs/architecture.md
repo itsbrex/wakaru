@@ -291,14 +291,14 @@ This works even when the `names` array is empty (common in esbuild output).
 
 When unpacking bundles, the driver runs a two-phase pipeline:
 
-1. **Phase 1 (parallel):** Obtain a resolved module AST. Source-only detector
+1. **Phase 1 (parallel, largest modules first):** Obtain a resolved module AST. Source-only detector
    output is parsed and resolved here; webpack5 can hand off its already
    resolved, bundler-normalized AST directly. Apply exact normal-only rewrites
    backed by detector-owned runtime facts, then run the rule registry through
    `UnEsm`, clone that barrier AST for webpack factory-IIFE fact recovery, and
    extract import/export facts. Retain the pre-recovery AST together with its
    `Globals` and unresolved mark.
-2. **Phase 2 (parallel):** Resume the retained Phase 1 AST → cross-module late
+2. **Phase 2 (parallel, largest modules first):** Resume the retained Phase 1 AST → cross-module late
    pass (exact CommonJS default-object composition, re-export consolidation,
    namespace decomposition, fact-aware helper recovery) → run the registry
    range resuming after `UnEsm`, through `UnReturn` → targeted late
