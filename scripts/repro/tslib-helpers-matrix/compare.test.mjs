@@ -86,3 +86,15 @@ test("class-expression alternate form still requires the complete recovered modu
   assert.equal(matches(split + "Foo = other;", snippet), false);
   assert.equal(matches(split.replace("this.#x", "get(this, map)"), snippet), false);
 });
+
+test("class-expression snapshot alternative preserves its single initialization and export", () => {
+  const source = "const Foo = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } }; export { Foo };";
+  const snapshot = "let temp; temp = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } }; export const Foo = temp;";
+  const snippet = { source, acceptForms: [snapshot] };
+  assert.equal(matches(snapshot, { source }), false);
+  assert.ok(matches(snapshot, snippet));
+  assert.equal(matches(snapshot.replace("export const Foo", "observe(temp); export const Foo"), snippet), false);
+  assert.equal(matches(snapshot + "temp = other;", snippet), false);
+  assert.equal(matches(snapshot.replace("Foo = temp", "Foo = other"), snippet), false);
+  assert.equal(matches(snapshot.replace("this.#x", "get(this, map)"), snippet), false);
+});

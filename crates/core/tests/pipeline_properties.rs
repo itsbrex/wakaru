@@ -435,3 +435,25 @@ function read(items){var _a=tslib_1.__read(items,2),a,b;return _a[0]+_a[1]}
         "{output}"
     );
 }
+
+#[test]
+fn export_specifier_alias_remains_independently_assignable() {
+    let provider = "const initial = 1; let active = initial; export { active as Current }; export function replace(next) { active = next; } export function readInitial() { return initial; }";
+    let consumer = "import { Current, replace, readInitial } from './provider.js'; use(Current, replace, readInitial);";
+    assert_pipeline_pair_valid(&[("provider.js", provider), ("consumer.js", consumer)]);
+}
+
+#[test]
+fn rest_assignment_does_not_capture_outer_const() {
+    let source = r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+const picked = 42;
+export function extract(source) {
+    var picked = source.key;
+    source = omit(source, ["key"]);
+    return [picked, source];
+}
+use(picked);
+"#;
+    assert_pipeline_pair_valid(&[("provider.js", source)]);
+}

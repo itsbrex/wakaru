@@ -351,7 +351,8 @@ fn run_un_object_rest(
                 scan_preceding_detailed(&recent_stmts, &source, &excluded_keys, unresolved_mark);
             let scope_names = collect_scope_names_module(&new_body);
             if preceding_scan.absorbed > 0 {
-                if let Some(new_stmt) = build_rest_assignment(
+                if let Some(new_stmts) = build_rest_assignment_with_declarations(
+                    &recent_stmts[recent_stmts.len() - preceding_scan.absorbed..],
                     original_span,
                     &rest_binding,
                     &source,
@@ -368,8 +369,10 @@ fn run_un_object_rest(
                         recent_stmts.push(source_init_stmt.clone());
                         new_body.push(ModuleItem::Stmt(source_init_stmt));
                     }
-                    recent_stmts.push(new_stmt.clone());
-                    new_body.push(ModuleItem::Stmt(new_stmt));
+                    for new_stmt in new_stmts {
+                        recent_stmts.push(new_stmt.clone());
+                        new_body.push(ModuleItem::Stmt(new_stmt));
+                    }
                     continue;
                 }
             }
@@ -1811,7 +1814,8 @@ impl VisitMut for ObjectRestProcessor<'_> {
                 );
                 let scope_names = collect_scope_names(&new_stmts);
                 if preceding_scan.absorbed > 0 {
-                    if let Some(new_stmt) = build_rest_assignment(
+                    if let Some(replacement) = build_rest_assignment_with_declarations(
+                        &new_stmts[new_stmts.len() - preceding_scan.absorbed..],
                         original_span,
                         &rest_binding,
                         &source,
@@ -1825,7 +1829,7 @@ impl VisitMut for ObjectRestProcessor<'_> {
                         if let Some(source_init) = preceding_scan.source_init {
                             new_stmts.push(build_source_init_stmt(source_init));
                         }
-                        new_stmts.push(new_stmt);
+                        new_stmts.extend(replacement);
                         continue;
                     }
                 }
@@ -3456,14 +3460,37 @@ fn build_rest_destructuring(
     })))
 }
 
-fn build_rest_assignment(
+fn build_rest_assignment_with_declarations(
+    preceding: &[Stmt],
     original_span: Span,
     rest_binding: &BindingIdent,
     source: &Expr,
     excluded_keys: &[Atom],
     merged: &[PrecedingAccess],
     scope_names: &crate::collections::HashSet<Atom>,
-) -> Option<Stmt> {
+) -> Option<Vec<Stmt>> {
+    let mut declarations = Vec::new();
+    for stmt in preceding {
+        if let Stmt::Decl(Decl::Var(var)) = stmt {
+            // Assignment recovery must not erase the local bindings it writes.
+            // Only plain var property reads can be split into hoisted declarations
+            // and assignments here. Keep lexical initialization and more complex
+            // patterns intact rather than changing their TDZ/default semantics.
+            if var.kind != VarDeclKind::Var
+                || var.decls.iter().any(|decl| {
+                    !matches!(decl.name, Pat::Ident(_))
+                        || !matches!(decl.init.as_deref(), Some(Expr::Member(_)))
+                })
+            {
+                return None;
+            }
+            let mut declaration = var.clone();
+            for decl in &mut declaration.decls {
+                decl.init = None;
+            }
+            declarations.push(Stmt::Decl(Decl::Var(declaration)));
+        }
+    }
     let mut key_to_binding: crate::collections::HashMap<Atom, (Atom, SyntaxContext)> =
         crate::collections::HashMap::default();
     let mut key_to_default: crate::collections::HashMap<Atom, Box<Expr>> =
@@ -3550,7 +3577,7 @@ fn build_rest_assignment(
     } else {
         DUMMY_SP
     };
-    Some(Stmt::Expr(ExprStmt {
+    declarations.push(Stmt::Expr(ExprStmt {
         span: stmt_span,
         expr: Box::new(Expr::Assign(AssignExpr {
             span: stmt_span,
@@ -3563,7 +3590,8 @@ fn build_rest_assignment(
             })),
             right: Box::new((*source).clone()),
         })),
-    }))
+    }));
+    Some(declarations)
 }
 
 /// Verify the for-in body references `indexOf` and `hasOwnProperty` —

@@ -888,3 +888,48 @@ function j() {
     let output = apply(input);
     assert_eq_normalized(&output, input);
 }
+
+#[test]
+fn written_export_specifier_alias_stays_distinct_from_source() {
+    for write in [
+        "active = next;",
+        "active++;",
+        "({ value: active } = next);",
+        "for (active of next) {}",
+    ] {
+        let input = format!(
+            "const initial = 1; let active = initial; \
+             function replace(next) {{ {write} }} \
+             use(initial, active, replace); export {{ active as Current }};"
+        );
+        let expected = format!(
+            "const initial = 1; export let Current = initial; \
+             function replace(next) {{ {} }} \
+             use(initial, Current, replace);",
+            write.replace("active", "Current")
+        );
+        assert_eq_normalized(&apply(&input), &expected);
+    }
+}
+
+#[test]
+fn export_alias_keeps_snapshot_when_source_is_written() {
+    for export in [
+        "const snapshot = initial; export { snapshot as Snapshot };",
+        "export const Snapshot = initial;",
+    ] {
+        let input = format!(
+            "let initial = 1; {export} function replace(next) {{ initial = next; }} use(initial, replace);"
+        );
+        let output = apply(&input);
+        assert!(output.contains("let initial = 1;"), "{output}");
+        assert!(output.contains("const Snapshot = initial;"), "{output}");
+    }
+}
+
+#[test]
+fn shadowed_alias_write_does_not_block_export_recovery() {
+    let input = "const initial = 1; const alias = initial; function update(alias) { alias++; } use(update); export { alias as Current };";
+    let expected = "export const Current = 1; function update(alias) { alias++; } use(update);";
+    assert_eq_normalized(&apply(input), expected);
+}

@@ -6,7 +6,7 @@ let r;
 let o;
 let i;
 let a;
-export let unstable_requestPaint;
+let u;
 if (typeof window === "undefined" || typeof MessageChannel !== "function") {
     let l = null;
     let c = null;
@@ -39,7 +39,7 @@ if (typeof window === "undefined" || typeof MessageChannel !== "function") {
         clearTimeout(c);
     };
     a = ()=>false;
-    unstable_requestPaint = exports.unstable_forceFrameRate = ()=>{};
+    u = exports.unstable_forceFrameRate = ()=>{};
 } else {
     const { performance: d, Date: p, setTimeout: h, clearTimeout: m } = window;
     if (typeof console !== "undefined") {
@@ -63,7 +63,7 @@ if (typeof window === "undefined" || typeof MessageChannel !== "function") {
     let E = 5;
     let x = 0;
     a = ()=>exports.unstable_now() >= x;
-    unstable_requestPaint = ()=>{};
+    u = ()=>{};
     exports.unstable_forceFrameRate = (e)=>{
         if (e < 0 || e > 125) {
             console.error("forceFrameRate takes a positive int between 0 and 125, forcing framerates higher than 125 fps is not unsupported");
@@ -266,6 +266,7 @@ function q(e) {
             return 5000;
     }
 }
+export const unstable_requestPaint = u;
 export const unstable_IdlePriority = 5;
 export const unstable_ImmediatePriority = 1;
 export const unstable_LowPriority = 4;

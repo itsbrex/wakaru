@@ -81,7 +81,11 @@ const snippets = [
     source: "const Foo = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } }; export { Foo };",
     // This class has no definition-time effects, and Foo is never reassigned.
     // The pipeline may retain adjacent declaration/assignment after sequence splitting.
-    acceptForms: ["export let Foo; Foo = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } };"],
+    // A written class temporary can also stay distinct from the final export snapshot.
+    acceptForms: [
+      "export let Foo; Foo = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } };",
+      "let temp; temp = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } }; export const Foo = temp;",
+    ],
     targets: ["ES2015"],
   },
   {

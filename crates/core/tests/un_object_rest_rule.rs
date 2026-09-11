@@ -1989,3 +1989,49 @@ use(outer);
 "#;
     assert_eq_normalized(&render_rule(input, CheckAllocations), expected);
 }
+
+#[test]
+fn rest_assignment_keeps_local_var_declarations() {
+    for (prefix, suffix) in [("", ""), ("function extract(source) {", "}")] {
+        let input = format!(
+            r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+{prefix}
+var picked = (source = source === undefined ? {{}} : source).key;
+var other = source.other;
+source = omit(source, ["key", "other"]);
+use(picked, other, source);
+{suffix}
+"#
+        );
+        let expected = format!(
+            r#"
+{prefix}
+source = source === undefined ? {{}} : source;
+var picked;
+var other;
+({{ key: picked, other, ...source }} = source);
+use(picked, other, source);
+{suffix}
+"#
+        );
+        assert_eq_normalized(&render_rule(&input, UnObjectRest::new), &expected);
+    }
+}
+
+#[test]
+fn rest_assignment_preserves_lexical_initialization() {
+    for kind in ["let", "const"] {
+        let input = format!(
+            r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+function extract(source) {{
+    {kind} picked = source.key;
+    source = omit(source, ["key"]);
+    use(picked, source);
+}}
+"#
+        );
+        assert_eq_normalized(&render_rule(&input, UnObjectRest::new), &input);
+    }
+}

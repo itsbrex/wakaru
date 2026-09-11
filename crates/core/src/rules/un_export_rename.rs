@@ -9,6 +9,7 @@ use swc_core::ecma::ast::{
 };
 use swc_core::ecma::visit::VisitMut;
 
+use crate::analysis::binding_uses::BindingUseIndex;
 use crate::js_names::is_reserved_binding_name;
 
 use super::rename_utils::{
@@ -50,7 +51,8 @@ impl VisitMut for UnExportRename {
         let mut module_names = collect_module_names(module);
         module_names.extend(collect_free_reference_names(module, self.unresolved_mark));
         let binding_infos = collect_top_level_binding_infos(module);
-        let shadow_bindings = collect_export_shadow_bindings(module, &binding_infos);
+        let written = BindingUseIndex::collect_direct_write_bindings(module);
+        let shadow_bindings = collect_export_shadow_bindings(module, &binding_infos, &written);
         if shadow_bindings.is_empty() {
             return;
         }
@@ -62,6 +64,7 @@ impl VisitMut for UnExportRename {
             &binding_infos,
             &shadow_index,
             &jsx_tags,
+            &written,
         );
 
         if plans.is_empty() {
@@ -104,6 +107,7 @@ impl VisitMut for UnExportRename {
 fn collect_export_shadow_bindings(
     module: &Module,
     binding_infos: &HashMap<Atom, TopLevelBindingInfo>,
+    written: &HashSet<BindingId>,
 ) -> HashSet<BindingId> {
     let mut bindings = HashSet::default();
 
@@ -146,7 +150,7 @@ fn collect_export_shadow_bindings(
                     continue;
                 }
                 let (info, _, alias_names) =
-                    resolve_to_real_binding(orig_info, &orig.sym, module, binding_infos);
+                    resolve_to_real_binding(orig_info, &orig.sym, module, binding_infos, written);
                 bindings.insert(info.id.clone());
                 for alias_name in alias_names {
                     if let Some(alias_info) = binding_infos.get(&alias_name) {
@@ -177,14 +181,21 @@ fn collect_export_rename_plans(
     binding_infos: &HashMap<Atom, TopLevelBindingInfo>,
     shadow_index: &RenameShadowIndex,
     jsx_tags: &HashSet<BindingId>,
+    written: &HashSet<BindingId>,
 ) -> Vec<ExportRenamePlan> {
     // Compute which names will be freed by export renames.  Given
     //   export { i as x };  export { x as f };
     // the name `x` is occupied but will be freed because `x` is itself renamed
     // to `f`.  We pre-compute the full set of freed names so all renames can be
     // planned in a single pass without iterative chain-following.
-    let freed_names =
-        compute_freed_names(module, binding_infos, module_names, shadow_index, jsx_tags);
+    let freed_names = compute_freed_names(
+        module,
+        binding_infos,
+        module_names,
+        shadow_index,
+        jsx_tags,
+        written,
+    );
 
     let mut plans = Vec::new();
 
@@ -208,7 +219,11 @@ fn collect_export_rename_plans(
                             let Some(info) = binding_infos.get(&init_id.sym) else {
                                 continue;
                             };
-                            if info.id != (init_id.sym.clone(), init_id.ctxt) || info.exported {
+                            if info.id != (init_id.sym.clone(), init_id.ctxt)
+                                || info.exported
+                                || written.contains(&info.id)
+                                || written.contains(&id.id.to_id())
+                            {
                                 continue;
                             }
                             let new_name = id.id.sym.clone();
@@ -273,8 +288,13 @@ fn collect_export_rename_plans(
                     }
                     // Resolve through var aliases: if orig is `var h = p`,
                     // use `p`'s binding info so the real class/fn gets renamed.
-                    let (info, old_name, alias_names) =
-                        resolve_to_real_binding(orig_info, &orig_name, module, binding_infos);
+                    let (info, old_name, alias_names) = resolve_to_real_binding(
+                        orig_info,
+                        &orig_name,
+                        module,
+                        binding_infos,
+                        written,
+                    );
                     let new_name = match exported {
                         ModuleExportName::Ident(ident) => ident.sym.clone(),
                         _ => continue,
@@ -390,12 +410,13 @@ fn compute_freed_names(
     module_names: &HashSet<Atom>,
     shadow_index: &RenameShadowIndex,
     jsx_tags: &HashSet<BindingId>,
+    written: &HashSet<BindingId>,
 ) -> HashSet<Atom> {
     // Pattern A (`export const X = z`) and Pattern C (getter namespaces) also
     // claim real bindings and target names; the planner honors them first and
     // rejects a specifier edge competing for the same binding or name.
     let (claimed_sources, claimed_targets) =
-        collect_competing_claims(module, binding_infos, module_names, shadow_index);
+        collect_competing_claims(module, binding_infos, module_names, shadow_index, written);
 
     // Step 1: collect eligible rename edges (orig → exported).
     // Only include edges that the planner would actually accept: the exported
@@ -420,8 +441,13 @@ fn compute_freed_names(
                     let Some(orig_info) = binding_infos.get(&orig.sym) else {
                         continue;
                     };
-                    let (info, old_name, alias_names) =
-                        resolve_to_real_binding(orig_info, &orig.sym, module, binding_infos);
+                    let (info, old_name, alias_names) = resolve_to_real_binding(
+                        orig_info,
+                        &orig.sym,
+                        module,
+                        binding_infos,
+                        written,
+                    );
                     if old_name == exported.sym || exported.sym.len() < old_name.len() {
                         continue;
                     }
@@ -558,6 +584,7 @@ fn collect_competing_claims(
     binding_infos: &HashMap<Atom, TopLevelBindingInfo>,
     module_names: &HashSet<Atom>,
     shadow_index: &RenameShadowIndex,
+    written: &HashSet<BindingId>,
 ) -> (HashSet<BindingId>, HashSet<Atom>) {
     let mut claimed_sources = HashSet::default();
     let mut claimed_targets = HashSet::default();
@@ -573,7 +600,11 @@ fn collect_competing_claims(
                         let Some(info) = binding_infos.get(&init_id.sym) else {
                             continue;
                         };
-                        if info.id != (init_id.sym.clone(), init_id.ctxt) || info.exported {
+                        if info.id != (init_id.sym.clone(), init_id.ctxt)
+                            || info.exported
+                            || written.contains(&info.id)
+                            || written.contains(&id.id.to_id())
+                        {
                             continue;
                         }
                         let new_name = id.id.sym.clone();
@@ -933,6 +964,7 @@ fn resolve_to_real_binding<'a>(
     name: &Atom,
     module: &Module,
     binding_infos: &'a HashMap<Atom, TopLevelBindingInfo>,
+    written: &HashSet<BindingId>,
 ) -> (&'a TopLevelBindingInfo, Atom, Vec<Atom>) {
     let mut current_info = info;
     let mut current_name = name.clone();
@@ -964,7 +996,13 @@ fn resolve_to_real_binding<'a>(
         let Some(real_info) = binding_infos.get(&init_id.sym) else {
             return (current_info, current_name, alias_names);
         };
-        if real_info.exported {
+        // An alias captures a value, not a live binding. Writes to either end
+        // must remain independent, including writes in deferred function bodies.
+        if real_info.id != init_id.to_id()
+            || real_info.exported
+            || written.contains(&current_info.id)
+            || written.contains(&real_info.id)
+        {
             return (current_info, current_name, alias_names);
         }
 
