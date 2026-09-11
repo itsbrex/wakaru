@@ -297,6 +297,37 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_var_const_conflicts_are_error_severity() {
+        for source in [
+            "export const value = 1; export var value = 2;",
+            "export var value = 1; export const value = 2;",
+        ] {
+            // Direct eval keeps the var declaration from being upgraded to
+            // const, so this exercises the mixed declaration conflict.
+            let source = format!("{source} function dynamic(code) {{ return eval(code); }}");
+            let output = decompile(
+                &source,
+                DecompileOptions {
+                    diagnostics: true,
+                    filename: "duplicate.js".into(),
+                    ..Default::default()
+                },
+            )
+            .expect("diagnostics retain the emitted code");
+            assert!(
+                output
+                    .warnings
+                    .iter()
+                    .any(|warning| { warning.kind == UnpackWarningKind::DuplicateDeclaration }),
+                "{source}\n{:?}",
+                output.warnings
+            );
+            assert!(output.code.contains("export var value"), "{}", output.code);
+            assert!(output.has_errors(), "{source}");
+        }
+    }
+
+    #[test]
     fn diagnostics_duplicate_declarations_inside_block() {
         let output = decompile(
             "{ const x = 1; const x = 2; }",

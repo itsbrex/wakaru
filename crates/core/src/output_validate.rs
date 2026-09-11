@@ -1442,6 +1442,8 @@ fn export_decl_bindings(decl: &Decl) -> Vec<(Atom, Span)> {
 enum DeclarationKind {
     Lexical,
     Var,
+    Function,
+    Parameter,
 }
 
 struct ScopeBinding {
@@ -1460,20 +1462,55 @@ fn duplicate_declaration_findings(
     module: &Module,
     source_map: &SourceMap,
 ) -> Vec<OutputFinding> {
+    declaration_conflicts(module, true)
+        .into_iter()
+        .map(|conflict| {
+            finding_at_span(
+                filename,
+                source_map,
+                conflict.span,
+                OutputFindingKind::DuplicateDeclaration,
+                format!(
+                    "duplicate {} declaration \"{}\"",
+                    conflict.scope, conflict.name
+                ),
+            )
+        })
+        .collect()
+}
+
+/// Producer diagnostics also accept classic scripts. Check lexical conflicts
+/// there without imposing ESM restrictions on repeated functions or parameters.
+/// Use printed names and syntactic scopes: resolver identities on invalid
+/// declarations need not agree, and `var` can cross nested block boundaries.
+pub(crate) fn conflicting_lexical_declaration_names(module: &Module) -> Vec<Atom> {
+    let mut seen = HashSet::default();
+    declaration_conflicts(module, false)
+        .into_iter()
+        .filter_map(|conflict| seen.insert(conflict.name.clone()).then_some(conflict.name))
+        .collect()
+}
+
+struct DeclarationConflict {
+    name: Atom,
+    span: Span,
+    scope: &'static str,
+}
+
+fn declaration_conflicts(module: &Module, esm_early_errors: bool) -> Vec<DeclarationConflict> {
     let mut bindings = direct_module_lexical_bindings(module);
     let mut var_collector = VarBindingCollector::default();
     module.visit_with(&mut var_collector);
     bindings.extend(var_collector.bindings);
 
     let mut visitor = DuplicateDeclarationVisitor {
-        filename,
-        source_map,
-        findings: Vec::new(),
+        esm_early_errors,
+        conflicts: Vec::new(),
         reported_locations: HashSet::default(),
     };
     visitor.check_scope(bindings, "module-scope");
     module.visit_children_with(&mut visitor);
-    visitor.findings
+    visitor.conflicts
 }
 
 fn direct_module_lexical_bindings(module: &Module) -> Vec<ScopeBinding> {
@@ -1535,7 +1572,7 @@ fn record_direct_lexical_decl(decl: &Decl, bindings: &mut Vec<ScopeBinding>) {
         Decl::Fn(function) => bindings.push(ScopeBinding {
             name: function.ident.sym.clone(),
             span: function.ident.span,
-            kind: DeclarationKind::Lexical,
+            kind: DeclarationKind::Function,
         }),
         Decl::Class(class) => bindings.push(ScopeBinding {
             name: class.ident.sym.clone(),
@@ -1633,7 +1670,7 @@ fn function_body_bindings(body: &FunctionBody) -> Vec<ScopeBinding> {
 fn parameter_bindings<'a>(parameters: impl IntoIterator<Item = &'a Pat>) -> Vec<ScopeBinding> {
     let mut bindings = Vec::new();
     for parameter in parameters {
-        record_scope_binding_pat(parameter, DeclarationKind::Lexical, &mut bindings);
+        record_scope_binding_pat(parameter, DeclarationKind::Parameter, &mut bindings);
     }
     bindings
 }
@@ -1653,19 +1690,21 @@ fn direct_function_body_lexical_bindings(body: &FunctionBody) -> Vec<ScopeBindin
     bindings
 }
 
-struct DuplicateDeclarationVisitor<'a> {
-    filename: &'a str,
-    source_map: &'a SourceMap,
-    findings: Vec<OutputFinding>,
+struct DuplicateDeclarationVisitor {
+    esm_early_errors: bool,
+    conflicts: Vec<DeclarationConflict>,
     reported_locations: HashSet<(Atom, u32)>,
 }
 
-impl DuplicateDeclarationVisitor<'_> {
-    fn check_scope(&mut self, mut bindings: Vec<ScopeBinding>, scope: &str) {
+impl DuplicateDeclarationVisitor {
+    fn check_scope(&mut self, mut bindings: Vec<ScopeBinding>, scope: &'static str) {
         bindings.sort_by_key(|binding| binding.span.lo);
         let mut first_kinds: HashMap<Atom, DeclarationKind> = HashMap::default();
         let mut reported_names = HashSet::default();
-        for binding in bindings {
+        for mut binding in bindings {
+            if !self.esm_early_errors && binding.kind == DeclarationKind::Function {
+                binding.kind = DeclarationKind::Var;
+            }
             let Some(first_kind) = first_kinds.get(&binding.name).copied() else {
                 first_kinds.insert(binding.name.clone(), binding.kind);
                 continue;
@@ -1673,7 +1712,11 @@ impl DuplicateDeclarationVisitor<'_> {
             // Repeated `var` declarations denote the same binding and are
             // legal. Every other repeat in this lexical scope is an early
             // error.
-            if first_kind == DeclarationKind::Var && binding.kind == DeclarationKind::Var {
+            if (first_kind == DeclarationKind::Var && binding.kind == DeclarationKind::Var)
+                || (!self.esm_early_errors
+                    && first_kind == DeclarationKind::Parameter
+                    && binding.kind == DeclarationKind::Parameter)
+            {
                 continue;
             }
             if reported_names.insert(binding.name.clone())
@@ -1681,13 +1724,11 @@ impl DuplicateDeclarationVisitor<'_> {
                     .reported_locations
                     .insert((binding.name.clone(), binding.span.lo.0))
             {
-                self.findings.push(finding_at_span(
-                    self.filename,
-                    self.source_map,
-                    binding.span,
-                    OutputFindingKind::DuplicateDeclaration,
-                    format!("duplicate {scope} declaration \"{}\"", binding.name),
-                ));
+                self.conflicts.push(DeclarationConflict {
+                    name: binding.name,
+                    span: binding.span,
+                    scope,
+                });
             }
         }
     }
@@ -1733,7 +1774,7 @@ impl DuplicateDeclarationVisitor<'_> {
     }
 }
 
-impl Visit for DuplicateDeclarationVisitor<'_> {
+impl Visit for DuplicateDeclarationVisitor {
     fn visit_function(&mut self, function: &Function) {
         let mut bindings = parameter_bindings(function.params.iter().map(|param| &param.pat));
         if let Some(body) = &function.body {

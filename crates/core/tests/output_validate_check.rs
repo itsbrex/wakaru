@@ -660,6 +660,20 @@ fn duplicate_top_level_lexical_declarations_are_reported() {
 }
 
 #[test]
+fn var_const_conflicts_are_reported_in_either_order() {
+    for source in [
+        "export const value = 1; var value = 2;",
+        "var value = 1; export const value = 2;",
+    ] {
+        assert_eq!(
+            kinds(&[("entry.js", source)]),
+            vec![(OutputFindingKind::DuplicateDeclaration, "entry.js".into())],
+            "{source}",
+        );
+    }
+}
+
+#[test]
 fn repeated_hoisted_var_declarations_are_legal() {
     let findings = kinds(&[(
         "entry.js",

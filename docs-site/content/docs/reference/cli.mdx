@@ -113,6 +113,10 @@ wakaru debug validate out/                 # validate an unpacked output tree as
 wakaru debug validate out/ --input bundle.js  # also report free identifiers that the input never left free
 ```
 
+With `--diagnostics`, conflicting emitted declarations (including `var` versus
+`let` or `const` across nested blocks) produce error-class warnings and a nonzero
+exit. Legal repeated `var` declarations and inner-scope shadowing are allowed.
+
 `debug validate` reports dangling references, broken imports/exports,
 duplicate declarations, writes to imported or `const` bindings, and free
 identifiers that exactly one other module declares at module scope. With

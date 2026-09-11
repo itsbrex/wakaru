@@ -256,6 +256,12 @@ wakaru input.js --profile trace.json           # Chrome trace (open with chrome:
 wakaru input.js --profile trace.json --profile-rules  # include per-rule spans
 ```
 
+With `--diagnostics`, emitted declaration checks report `var` conflicts with
+`let`, `const`, classes, or imports, including `var` declarations hoisted through
+nested blocks. These are error-class `duplicate_declaration` warnings and make
+the command exit nonzero. Repeated `var` declarations and legal inner-scope
+shadowing do not count as conflicts.
+
 For development and benchmark triage, validate a normal unpack output tree as
 one emitted-module graph:
 

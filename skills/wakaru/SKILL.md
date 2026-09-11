@@ -178,6 +178,9 @@ reachability sweep is desired.
 - Inspect every JSON warning's `is_error` field. Entries with `is_error: false`
   are non-fatal; an error-class warning makes the command fail even though the
   JSON output and successfully recovered files may still be written.
+- Use `--diagnostics` to catch emitted declaration conflicts during decompile or
+  unpack, including `var` versus `let`/`const`. A `duplicate_declaration` warning
+  is an error even if `failed` is zero; legal repeated `var` declarations are allowed.
 - `failed` in unpack JSON counts modules that errored during decompilation;
   `total` is the module count. Treat `failed > 0` as a failed run.
 - With `--vue-sfc`, `recovered_vue_sfc` means a `.vue` artifact was written;
