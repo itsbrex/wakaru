@@ -5,58 +5,59 @@ description: Common questions about Wakaru.
 
 ## How is Wakaru different from a formatter or beautifier?
 
-A formatter only changes whitespace and layout. Wakaru rewrites the
-JavaScript AST to reverse minifier artifacts, restore transpiled syntax,
-remove bundler runtime patterns, and split bundles back into modules.
+A formatter changes whitespace and layout. Wakaru also recovers modern
+syntax, removes recognized helpers, and splits bundles into modules.
+See [What is Wakaru](/what-is-wakaru) for a before-and-after example.
 
 ## How do I unminify JavaScript?
 
 Run `npx wakaru input.js -o output.js`, or paste the code into the
-[playground](https://wakarujs.com/playground/). Wakaru reverses minifier
-artifacts (sequence expressions, `!0`/`void 0` literal tricks, flipped
-comparisons) and transpiler helpers (Babel, TypeScript, SWC) to recover
-readable modern JavaScript.
+[playground](https://wakarujs.com/playground/). See
+[Unminify a file](/guides/unminify-a-file) for output options and name recovery.
 
 ## How do I decompile a webpack bundle?
 
-Run `npx wakaru bundle.js --unpack -o out/`. Wakaru detects webpack 4/5 and
-the other formats listed in [Unpack a bundle](/guides/unpack-a-bundle), then
-splits the bundle into individual modules and decompiles each one.
+Run `npx wakaru bundle.js --unpack -o out/`. For a build with multiple chunks,
+pass them together. [Unpack a bundle](/guides/unpack-a-bundle) explains how to
+choose the inputs, and [Read an unpacked bundle](/guides/read-an-unpacked-bundle)
+shows how to find the code you need afterward.
+
+## Can I run the recovered code as an application?
+
+It is possible. Start with `--level minimal` to prioritize preserving the
+input's behavior. Wakaru aims to produce working code, but cannot guarantee
+that every case will run correctly. You may also need to restore dependencies,
+assets, and build configuration. See [Rewrite levels](/guides/rewrite-levels).
 
 ## Can Wakaru extract JavaScript from a Bun single-file executable?
 
-Yes. Run `npx wakaru ./compiled-app --unpack -o out/` on a
-`bun build --compile` binary. Wakaru validates Bun's
-embedded module graph and decompiles the JavaScript entries without ever
-executing the binary. `npx wakaru bun extract ./compiled-app -o extracted/`
-dumps every embedded file, assets included.
+Yes. Run `npx wakaru ./compiled-app --unpack -o out/`. Wakaru reads the
+embedded JavaScript without running the executable. To extract assets too,
+see [Bun single-file executable](/guides/bun-single-file-executable).
 
 ## Can Wakaru deobfuscate JavaScript?
 
-No. Heavy obfuscation such as string arrays, control-flow flattening, and
-VM-based protectors is a different problem. Strip it first with a dedicated
-tool like [webcrack](https://github.com/j4k0xb/webcrack), then use Wakaru to
-recover readable modules. See
-[What is Wakaru](/what-is-wakaru#what-it-is-not) for the pipeline.
+Wakaru focuses on minifier and transpiler output. Deliberately obfuscated
+code needs a dedicated tool first. See [Obfuscated code](/guides/obfuscated-code)
+for how to recognize it and combine tools.
 
 ## Can it recover original variable names?
 
-Yes, when the source map includes original names: Wakaru recovers them and
-deduplicates imports. Without one, it applies conservative renaming
-heuristics where the code gives evidence, but most mangled names stay short.
-Pair it with an LLM renamer like
-[humanify](https://github.com/jehna/humanify) if you want guessed names.
+When a source map retains the original names, Wakaru can recover them.
+Without one, some names can be inferred from the code, but most mangled
+locals stay short. See [Source maps](/guides/source-maps) for name recovery
+and extracting original files, or [Variable names](/guides/unminify-a-file#variable-names)
+for other options.
 
 ## Is the output guaranteed to behave the same?
 
-Wakaru is designed to preserve behavior while recovering readable structure.
-[Rewrite levels](/guides/rewrite-levels) let you choose between behavioral
-fidelity and stronger readability-oriented recovery. Use `minimal` when
-fidelity matters most. A Test262 round-trip harness continuously measures
-semantic preservation.
+Not for every input. Wakaru tests semantic preservation, and
+[rewrite levels](/guides/rewrite-levels) let you choose how far recovery goes.
+Use `minimal` when behavioral fidelity matters most. See
+[Correctness](/project/correctness) for what the tests measure.
 
 ## Does it run in the browser?
 
-Yes. The [playground](https://wakarujs.com/playground/) is the WebAssembly
-build of the same Rust engine, running entirely in your browser. No code
-leaves your machine.
+Yes. The [playground](https://wakarujs.com/playground/) processes code locally
+in your browser. Use the CLI to unpack bundles or work with multiple files.
+See [Playground](/guides/playground) for the available modes.

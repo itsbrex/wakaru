@@ -45,6 +45,19 @@ only `.js`, `.mjs`, and `.cjs` candidates, and stdin remains text input. Use
 See [bun-standalone.md](bun-standalone.md) for the container format, safety
 properties, and current limits.
 
+## Module provenance
+
+```bash
+wakaru bundle.js --unpack --provenance -o out/
+```
+
+`--provenance` writes `provenance.json` alongside the recovered modules.
+Each entry maps an emitted filename to its `input`, extraction `ranges`, and
+`extraction` strategy. Ranges are zero-based byte offsets with an exclusive
+end, `[start, end)`. They identify the input regions used to recover a module,
+not a position-by-position mapping of the rewritten code. Use
+`--emit-source-map` for output position mappings.
+
 ## Extract every file from a Bun single-file executable
 
 ```bash

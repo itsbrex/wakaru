@@ -3,9 +3,17 @@ title: Source maps
 description: Recover names and original sources from a map, or emit maps for the decompiled output.
 ---
 
-Wakaru works with source maps in both directions. An input map improves the
-decompiled output. An output map connects the decompiled result back to the
-input.
+Choose the operation that matches what you want to recover or trace:
+
+| I want to… | Use |
+| --- | --- |
+| Get the original source files back | [Extract the sources](#recover-the-original-sources) with `wakaru extract` |
+| Improve variable names in decompiled code | [Provide an input map](#recover-names-with-an-input-map) with `--source-map` |
+| Trace recovered code back to its input | [Emit an output map](#emit-a-map-for-the-output) with `--emit-source-map` |
+
+If you have a source map, try extracting the original files first. You may
+not need to decompile anything. If you only want to trace Wakaru's output,
+you can emit a map without having an original source map.
 
 ## Recover the original sources
 
@@ -24,11 +32,12 @@ whenever a map is available.
 npx wakaru input.js --source-map input.js.map -o output.js
 ```
 
-Not every map embeds the sources. When it only carries names and mappings,
-pass it to a normal decompile run: Wakaru applies the original names and
-deduplicates imports. This works in single-file mode only. `--unpack`
-rejects input maps, because the split modules no longer line up with the
-bundle's coordinates.
+Use an input map when you want to keep decompiling the code and improve its
+names. Wakaru can recover identifiers from names recorded in the map or
+from embedded source files.
+
+This works in single-file mode only. `--unpack` rejects input maps because
+the split modules no longer line up with the bundle's coordinates.
 
 ## Emit a map for the output
 

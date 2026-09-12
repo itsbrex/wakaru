@@ -108,6 +108,10 @@ hints (resource paths, dependency-map requests, original input paths), which
 yield readable relative filenames; collisions are made unique. Raw output
 keeps provisional extraction names.
 
+When you need to check a recovered module against the input, add
+`--provenance` to the unpack command. Look up its emitted filename in
+`out/provenance.json` for the source input and `[start, end)` byte ranges.
+
 ### 3. Recover names / original source when a map exists
 
 ```bash

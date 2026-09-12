@@ -91,11 +91,18 @@ show, with version and commit hash removed so they do not go stale.
 
 Source material per page, for whoever edits them later:
 
+Quick Start covers the first commands and their output. What is Wakaru
+explains the transformations with examples. Unpack a bundle covers input
+selection and unpack modes, while Read an unpacked bundle follows a question
+through the recovered code. Keep full support lists in Supported inputs and
+link there from the other pages.
+
 | Page | Source material |
 | --- | --- |
 | Quick Start (`index`) | README |
 | What is Wakaru | landing FAQ, README |
 | Unpack a bundle | `docs/cli.md`, `docs/unpacking.md` |
+| Read an unpacked bundle | `docs-site/examples/request-demo/`, `docs/cli.md` |
 | Unminify a file | `docs/cli.md` |
 | Obfuscated code | README "Works with other tools" |
 | Rewrite levels | `docs/rewrite-assumptions.md` |
@@ -110,6 +117,19 @@ Source material per page, for whoever edits them later:
 | FAQ | landing FAQ |
 | Troubleshooting | `docs/cli.md`, `docs/unpacking.md`, the large-inputs note in AGENTS.md |
 | Correctness | `docs/test262-roundtrip.md`, README |
+
+### Bundle walkthrough example
+
+The walkthrough uses `docs-site/public/examples/request-demo.js`, generated
+from the three CommonJS files in `docs-site/examples/request-demo/`.
+To regenerate it from that directory:
+
+```bash
+npx esbuild@0.25.12 entry.cjs --bundle --platform=browser --format=iife --minify --tsconfig-raw='{}' --outfile=../../public/examples/request-demo.js
+```
+
+After changing the sample, unpack it and check the filenames, code excerpts,
+and provenance ranges in the guide against the actual output.
 
 ## Backlog
 

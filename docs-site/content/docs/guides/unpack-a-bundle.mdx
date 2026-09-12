@@ -10,22 +10,8 @@ npx wakaru bundle.js --unpack -o out/
 Wakaru detects the bundle format automatically, splits the bundle into one
 file per module, and decompiles each module.
 
-## Supported bundlers
-
-You don't have to pass a format flag for any of these:
-
-- **webpack 4/5**
-- **`@vercel/ncc`**
-- **Rollup / Vite** scope-hoisted ESM output (heuristic)
-- **esbuild / Bun**
-- **Metro** (React Native)
-- **Browserify**, including Cocos Creator 2.x
-- **Closure ModuleManager**
-- **SystemJS**
-- **AMD/UMD** wrappers
-
-Bun single-file executables work too. See
-[Bun single-file executable](/guides/bun-single-file-executable).
+See [Supported inputs](/reference/supported-inputs#bundlers) for supported
+bundlers and format-specific limits. You do not need to specify a format.
 
 ## Inputs
 
@@ -51,13 +37,14 @@ out/
 └── module-823.js
 ```
 
-Module filenames come from the best available evidence. When the bundle
-still carries real paths, such as webpack string IDs or Browserify
-dependency maps, Wakaru uses them. Other modules get stable generated names
-like `module-184.js` above, where the number is the bundle's own module ID.
-Name collisions receive numeric suffixes.
+Names depend on what the bundle retains. Some modules keep readable paths,
+while others receive generated names. See
+[Output & warnings](/reference/output-and-warnings) for naming and failure handling.
 
 The output directory must be new or empty unless you pass `--force`.
+
+To start exploring the files, follow
+[Read an unpacked bundle](/guides/read-an-unpacked-bundle).
 
 ## Variants
 
