@@ -576,6 +576,23 @@ fn detect_from_prepared_factories(
         vec![HashSet::default(); standalone_factories.len()];
     let mut writer_factory_indices = HashSet::default();
     for (writer_index, factory) in standalone_factories.iter().enumerate() {
+        // A factory body that assigns top-level state directly is a writer of
+        // that state too. Join it to the state's owner so the group declares
+        // the binding once instead of every writing factory keeping a copy.
+        for write_binding in &factory.write_bindings {
+            let Some(owner_index) = binding_to_filename
+                .get(write_binding)
+                .and_then(|filename| factory_index_by_filename.get(filename))
+                .copied()
+            else {
+                continue;
+            };
+            writer_factory_indices.insert(writer_index);
+            if owner_index != writer_index {
+                writer_adjacency[writer_index].insert(owner_index);
+                writer_adjacency[owner_index].insert(writer_index);
+            }
+        }
         for owned_binding in factory_owned_bindings
             .get(&factory.filename)
             .into_iter()
@@ -689,6 +706,10 @@ fn detect_from_prepared_factories(
     let mut relocated_factory_writer_items: HashMap<String, Vec<TopLevelWriterItem>> =
         HashMap::default();
     let mut relocation_demoted_groups: HashSet<String> = HashSet::default();
+    let reassigned_top_level_bindings: HashSet<BindingId> = top_level_writer_items
+        .iter()
+        .flat_map(|writer| writer.write_targets.iter().cloned())
+        .collect();
     for writer in top_level_writer_items {
         if !remaining_entry_spans.contains(&(writer.span.lo.0, writer.span.hi.0)) {
             continue;
@@ -715,6 +736,53 @@ fn detect_from_prepared_factories(
                 })
             {
                 continue;
+            }
+            // A hoisted function declaration that writes the group's state
+            // joins the ownership unit outright: the owner declares and
+            // exports it, and entry call sites follow the import. Only a
+            // stable binding qualifies; moving a reassigned function would
+            // shift the import write from the state to the callable.
+            if let (ModuleItem::Stmt(Stmt::Decl(Decl::Fn(_))), Some(binding)) = (
+                &module.body[writer.source_index],
+                writer.declared_bindings.iter().next().cloned(),
+            ) {
+                let targets_owned = writer.write_targets.iter().all(|target| {
+                    binding_to_filename
+                        .get(target)
+                        .is_some_and(|filename| *filename == owner_filename)
+                });
+                let deps_resolvable = !writer.referenced_bindings.iter().any(|ref_binding| {
+                    ref_binding != &binding
+                        && top_level_decl_indices.contains_key(ref_binding)
+                        && !binding_to_filename.contains_key(ref_binding)
+                        && !external_imports.contains_key(ref_binding)
+                });
+                if targets_owned
+                    && deps_resolvable
+                    && !reassigned_top_level_bindings.contains(&binding)
+                    && !binding_to_filename.contains_key(&binding)
+                {
+                    binding_to_filename.insert(binding.clone(), owner_filename.clone());
+                    factory_owned_bindings
+                        .entry(owner_filename.clone())
+                        .or_default()
+                        .insert(binding);
+                    // The group now holds a writer of its own state, so entry
+                    // copies of that unit must be dropped and re-imported.
+                    affected_factory_filenames.insert(owner_filename.clone());
+                    affected_original_factory_filenames.extend(
+                        standalone_original_filenames
+                            .iter()
+                            .filter(|original| {
+                                factory_filename_redirects
+                                    .get(*original)
+                                    .unwrap_or(*original)
+                                    == &owner_filename
+                            })
+                            .cloned(),
+                    );
+                    continue;
+                }
             }
             // Relocatable iff the statement can move as a unit, every written
             // top-level binding belongs to this owner (a write to an
@@ -833,10 +901,9 @@ fn detect_from_prepared_factories(
             .collect();
         let demotion_safe = standalone_factories.iter().all(|factory| {
             !demoted.contains(&factory.filename)
-                // CJS factories have a different synthesis; a partially
-                // filtered mixed declaration already left a sibling in entry.
-                || (factory.cjs_params.is_none()
-                    && !remaining_entry_spans.contains(&(factory.span.lo.0, factory.span.hi.0)))
+                // A partially filtered mixed declaration already left a
+                // sibling in entry at the factory's own span.
+                || !remaining_entry_spans.contains(&(factory.span.lo.0, factory.span.hi.0))
         }) && !merged_factories.values().flatten().any(|merged| {
             merged
                 .referenced_bindings
@@ -849,13 +916,54 @@ fn detect_from_prepared_factories(
         if demotion_safe {
             let mut kept_factories = Vec::with_capacity(standalone_factories.len());
             let mut restored_items: Vec<(u32, ModuleItem)> = Vec::new();
+            // The synthesized cache/guard joins the entry's top-level scope.
+            // Reserve every name the entry already declares or imports, plus
+            // the restored factory names, so the helper cannot shadow a `var`
+            // (silently skipping the body) or duplicate a lexical binding.
+            let mut reserved_entry_atoms: HashSet<Atom> = remaining_entry
+                .iter()
+                .flat_map(|item| {
+                    module_item_declared_binding_ids(item)
+                        .into_iter()
+                        .chain(module_item_import_binding_ids(item))
+                })
+                .map(|(atom, _)| atom)
+                .collect();
+            reserved_entry_atoms.extend(
+                standalone_factories
+                    .iter()
+                    .filter(|factory| demoted.contains(&factory.filename))
+                    .map(|factory| factory.var_name.clone()),
+            );
             for factory in standalone_factories {
                 if demoted.contains(&factory.filename) {
-                    restored_items.extend(synthesize_entry_init_items(
-                        &factory.var_name,
-                        factory.body_stmts,
-                        factory.span,
-                    ));
+                    restored_items.extend(match &factory.cjs_params {
+                        Some(cjs_params) => {
+                            let cache = reserve_import_atom(
+                                &format!("__wakaru_{}_cache", factory.var_name).into(),
+                                &mut reserved_entry_atoms,
+                            );
+                            synthesize_entry_cjs_items(
+                                &factory.var_name,
+                                &cache,
+                                cjs_params,
+                                factory.body_stmts,
+                                factory.span,
+                            )
+                        }
+                        None => {
+                            let guard = reserve_import_atom(
+                                &format!("__wakaru_{}_initialized", factory.var_name).into(),
+                                &mut reserved_entry_atoms,
+                            );
+                            synthesize_entry_init_items(
+                                &factory.var_name,
+                                &guard,
+                                factory.body_stmts,
+                                factory.span,
+                            )
+                        }
+                    });
                 } else {
                     kept_factories.push(factory);
                 }
@@ -1126,6 +1234,10 @@ fn detect_from_prepared_factories(
         }
     }
 
+    let standalone_factory_write_bindings: HashSet<BindingId> = standalone_factories
+        .iter()
+        .flat_map(|factory| factory.write_bindings.iter().cloned())
+        .collect();
     let mut standalone_factory_group_order = Vec::new();
     let mut standalone_factory_groups: HashMap<String, Vec<PendingFactory>> = HashMap::default();
     for factory in standalone_factories {
@@ -1406,6 +1518,11 @@ fn detect_from_prepared_factories(
         // the mutable state silently.
         let mut relocated_entry_bindings: HashSet<BindingId> = entry_duplicate_declarations;
         for binding in &affected_owned_bindings {
+            // State assigned directly by a factory body has no support-writer
+            // edge; the factory group owns its declaration all the same.
+            if standalone_factory_write_bindings.contains(binding) {
+                relocated_entry_bindings.insert(binding.clone());
+            }
             let written_state: Vec<BindingId> = top_level_decl_writes
                 .get(binding)
                 .into_iter()
@@ -1572,14 +1689,11 @@ impl MergedRefResolver<'_> {
 /// original bytes.
 fn synthesize_entry_init_items(
     var_name: &Atom,
+    guard_name: &Atom,
     body_stmts: Vec<Stmt>,
     span: Span,
 ) -> Vec<(u32, ModuleItem)> {
-    let guard = Ident::new(
-        format!("__wakaru_{var_name}_initialized").into(),
-        DUMMY_SP,
-        SyntaxContext::empty(),
-    );
+    let guard = Ident::new(guard_name.clone(), DUMMY_SP, SyntaxContext::empty());
     let guard_decl = ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(VarDecl {
         span: DUMMY_SP,
         ctxt: SyntaxContext::empty(),
@@ -1647,6 +1761,130 @@ fn synthesize_entry_init_items(
     })));
 
     vec![(span.lo.0, guard_decl), (span.lo.0, init_fn)]
+}
+
+/// Re-synthesize a demoted CommonJS factory into the entry as a cached
+/// callable, mirroring the standalone emission shape:
+/// `var cache; function name() { if (cache) return ...; var exports = {};
+/// [var module = { exports };] cache = ...; <body> return ...; }`.
+fn synthesize_entry_cjs_items(
+    var_name: &Atom,
+    cache_name: &Atom,
+    cjs_params: &CjsFactoryParams,
+    body_stmts: Vec<Stmt>,
+    span: Span,
+) -> Vec<(u32, ModuleItem)> {
+    let ident = |sym: &Atom| Ident::new(sym.clone(), DUMMY_SP, SyntaxContext::empty());
+    let var_stmt = |name: Ident, init: Option<Expr>| {
+        Stmt::Decl(Decl::Var(Box::new(VarDecl {
+            span: DUMMY_SP,
+            ctxt: SyntaxContext::empty(),
+            kind: VarDeclKind::Var,
+            declare: false,
+            decls: vec![VarDeclarator {
+                span: DUMMY_SP,
+                name: Pat::Ident(BindingIdent {
+                    id: name,
+                    type_ann: None,
+                }),
+                init: init.map(Box::new),
+                definite: false,
+            }],
+        })))
+    };
+    let exports_member = |obj: Ident| {
+        Expr::Member(MemberExpr {
+            span: DUMMY_SP,
+            obj: Box::new(Expr::Ident(obj)),
+            prop: MemberProp::Ident(IdentName::new("exports".into(), DUMMY_SP)),
+        })
+    };
+
+    let cache = ident(cache_name);
+    let exports = ident(&cjs_params.exports);
+    let module = cjs_params.module.as_ref().map(ident);
+    let cache_decl = ModuleItem::Stmt(var_stmt(cache.clone(), None));
+
+    let cached_return = match &module {
+        Some(_) => exports_member(cache.clone()),
+        None => Expr::Ident(cache.clone()),
+    };
+    let mut stmts: Vec<Stmt> = Vec::with_capacity(body_stmts.len() + 5);
+    stmts.push(Stmt::If(IfStmt {
+        span: DUMMY_SP,
+        test: Box::new(Expr::Ident(cache.clone())),
+        cons: Box::new(Stmt::Return(ReturnStmt {
+            span: DUMMY_SP,
+            arg: Some(Box::new(cached_return)),
+        })),
+        alt: None,
+    }));
+    stmts.push(var_stmt(
+        exports.clone(),
+        Some(Expr::Object(ObjectLit {
+            span: DUMMY_SP,
+            props: Vec::new(),
+        })),
+    ));
+    if let Some(module) = &module {
+        stmts.push(var_stmt(
+            module.clone(),
+            Some(Expr::Object(ObjectLit {
+                span: DUMMY_SP,
+                props: vec![PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                    key: PropName::Ident(IdentName::new("exports".into(), DUMMY_SP)),
+                    value: Box::new(Expr::Ident(exports.clone())),
+                })))],
+            })),
+        ));
+    }
+    let cache_value = match &module {
+        Some(module) => Expr::Ident(module.clone()),
+        None => Expr::Ident(exports.clone()),
+    };
+    stmts.push(Stmt::Expr(ExprStmt {
+        span: DUMMY_SP,
+        expr: Box::new(Expr::Assign(AssignExpr {
+            span: DUMMY_SP,
+            op: AssignOp::Assign,
+            left: AssignTarget::Simple(SimpleAssignTarget::Ident(BindingIdent {
+                id: cache,
+                type_ann: None,
+            })),
+            right: Box::new(cache_value),
+        })),
+    }));
+    stmts.extend(body_stmts);
+    let return_value = match &module {
+        Some(module) => exports_member(module.clone()),
+        None => Expr::Ident(exports),
+    };
+    stmts.push(Stmt::Return(ReturnStmt {
+        span: DUMMY_SP,
+        arg: Some(Box::new(return_value)),
+    }));
+
+    let factory_fn = ModuleItem::Stmt(Stmt::Decl(Decl::Fn(FnDecl {
+        ident: Ident::new(var_name.clone(), DUMMY_SP, SyntaxContext::empty()),
+        declare: false,
+        function: Box::new(Function {
+            params: Vec::new(),
+            decorators: Vec::new(),
+            span,
+            ctxt: SyntaxContext::empty(),
+            body: Some(FunctionBody {
+                span: DUMMY_SP,
+                stmts,
+            }),
+            is_generator: false,
+            is_async: false,
+            type_params: None,
+            return_type: None,
+            this_param: None,
+        }),
+    })));
+
+    vec![(span.lo.0, cache_decl), (span.lo.0, factory_fn)]
 }
 
 fn emit_esm_init_function_code(

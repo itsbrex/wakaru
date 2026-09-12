@@ -70,7 +70,21 @@ attempted in order — first match wins:
    reached function containing a Promise callback can therefore retain an
    unlinked reference even though that callback runs later at runtime.
    Mutable state and hoisted support functions that write it share one
-   synthetic owner. Standalone CommonJS factories participate in that grouping
+   synthetic owner. A standalone factory whose body assigns a top-level
+   binding directly is a writer of that state as well: every factory writing
+   the same binding joins one group, the group declares the binding once, and
+   the entry declaration moves with it so entry reads become imports. An
+   entry function declaration that writes the group's state joins the unit
+   the same way when its binding is never reassigned and its other
+   dependencies already have an emitted owner; entry calls it through an
+   import. Any other entry writer either relocates as a statement or cancels
+   the split: the group demotes back into entry, a CommonJS factory as a
+   synthesized cached callable and a lazy ESM initializer as a guarded init
+   function. When a scope module or merged factory still references the
+   demoted group, demotion is impossible and the entry writer's assignment
+   to the imported state remains as a residual that output validation
+   reports.
+   Standalone CommonJS factories participate in that grouping
    alongside lazy ESM initializers; each retains its own callable wrapper and
    cache/initialization guard. An unconsumed hoisted entry function can also
    move into a scope module when every binding it writes belongs to that module

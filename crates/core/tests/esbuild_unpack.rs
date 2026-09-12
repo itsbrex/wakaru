@@ -1925,6 +1925,265 @@ export { ns };
     assert_eq!(validate_output_modules(&pairs), vec![]);
 }
 
+/// Factories that assign a top-level binding directly are writers of that
+/// state, like support declarations. Every such factory joins one ownership
+/// group, the group declares the state once, and entry.js re-imports it
+/// instead of keeping a second copy.
+#[test]
+fn standalone_factories_writing_shared_state_share_one_owner() {
+    let bundle = r#"
+var __esm = (fn, value) => () => (fn && (value = fn(fn = 0)), value);
+var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var ready = 0;
+var require_lib = __commonJS((exports, module) => { ready = 1; module.exports = { read: () => ready }; });
+var init_lib = __esm(() => { ready = 2; });
+record(require_lib().read()); init_lib(); record(require_lib().read()); record(ready);
+"#;
+    for pairs in [
+        expect_unpack_raw(bundle),
+        expect_unpack(bundle, "bundle.js"),
+    ] {
+        let declarations: Vec<&String> = pairs
+            .iter()
+            .filter(|(_, code)| code.contains("var ready = 0") || code.contains("let ready = 0"))
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            declarations.len(),
+            1,
+            "the state must be declared exactly once: {pairs:#?}"
+        );
+        let owner = &pairs
+            .iter()
+            .find(|(name, _)| name == declarations[0])
+            .unwrap()
+            .1;
+        assert!(
+            owner.contains("export function require_lib")
+                && owner.contains("export function init_lib"),
+            "both writers must share the state owner: {owner}"
+        );
+        let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+        assert!(
+            !entry.contains("var ready") && !entry.contains("let ready") && entry.contains("ready"),
+            "entry must import the single mutable copy: {entry}"
+        );
+        assert_eq!(validate_output_modules(&pairs), vec![]);
+    }
+}
+
+/// An entry function declaration that writes factory-owned state joins the
+/// ownership unit like a support declaration: the group declares the state
+/// and exports the writer, and entry calls it through an import.
+#[test]
+fn entry_function_writer_joins_factory_state_group() {
+    for factory in [
+        "var load = __commonJS((exports, module) => { ready = 1; module.exports = 1; });",
+        "var load = __esm(() => { ready = 1; });",
+    ] {
+        let bundle = format!(
+            r#"
+var __esm = (fn, value) => () => (fn && (value = fn(fn = 0)), value);
+var __commonJS = (cb, mod) => () => (mod || cb((mod = {{ exports: {{}} }}).exports, mod), mod.exports);
+var require_dummy = __commonJS((exports, module) => {{ module.exports = {{}}; }});
+var ready = 0;
+{factory}
+function reset() {{ ready = 2; }}
+record(load()); reset(); record(ready); record(require_dummy());
+export {{ reset }};
+"#
+        );
+        for pairs in [
+            expect_unpack_raw(&bundle),
+            expect_unpack(&bundle, "bundle.js"),
+        ] {
+            let owners: Vec<&(String, String)> = pairs
+                .iter()
+                .filter(|(_, code)| code.contains("ready = 0"))
+                .collect();
+            assert_eq!(owners.len(), 1, "state declared once: {pairs:#?}");
+            let owner = &owners[0].1;
+            assert!(
+                owner.contains("function reset") && owner.contains("export function load"),
+                "writer and factory share the state owner: {owner}"
+            );
+            let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+            assert!(
+                !entry.contains("ready = 0")
+                    && !entry.contains("function reset")
+                    && entry.contains("reset()")
+                    && entry.contains("export { reset }"),
+                "entry calls and re-exports the relocated writer: {entry}"
+            );
+            assert_eq!(validate_output_modules(&pairs), vec![]);
+        }
+    }
+}
+
+/// An entry writer that cannot move or join the group cancels the split. A
+/// CommonJS factory demotes like a lazy ESM initializer: the entry keeps the
+/// state, the writer, and a synthesized cached callable.
+#[test]
+fn unrelocatable_entry_writer_demotes_cjs_factory_group() {
+    for writer in [
+        "var reset = () => { ready = 2; };",
+        "function reset() { ready = 2; } reset = () => { ready = 3; };",
+    ] {
+        let bundle = format!(
+            r#"
+var __commonJS = (cb, mod) => () => (mod || cb((mod = {{ exports: {{}} }}).exports, mod), mod.exports);
+var ready = 0;
+var load = __commonJS((exports, module) => {{ ready = 1; module.exports = {{ read: () => ready }}; }});
+{writer}
+record(load().read()); reset(); record(ready);
+"#
+        );
+        for pairs in [
+            expect_unpack_raw(&bundle),
+            expect_unpack(&bundle, "bundle.js"),
+        ] {
+            assert!(
+                pairs.iter().all(|(name, _)| name != "load.js"),
+                "the group must demote into entry: {pairs:#?}"
+            );
+            let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+            assert!(
+                entry.contains("ready = 0")
+                    && entry.contains("function load()")
+                    && entry.contains("__wakaru_load_cache")
+                    && entry.contains("ready = 1")
+                    && entry.contains("ready = 2"),
+                "entry keeps state, writer, and the cached factory: {entry}"
+            );
+            assert_eq!(validate_output_modules(&pairs), vec![]);
+        }
+    }
+}
+
+/// A factory declared in a mixed declaration leaves its sibling declarator
+/// in entry. With an unrelocatable entry writer the group still cancels its
+/// split, and no assignment to an import survives.
+#[test]
+fn mixed_declaration_factory_group_demotes_with_entry_writer() {
+    let bundle = r#"
+var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var ready = 0, load = __commonJS((exports, module) => { ready = 1; module.exports = 1; });
+var reset = () => { ready = 2; };
+record(load()); reset(); record(ready);
+"#;
+    for pairs in [
+        expect_unpack_raw(bundle),
+        expect_unpack(bundle, "bundle.js"),
+    ] {
+        let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+        assert!(
+            entry.contains("ready = 0") && entry.contains("ready = 2"),
+            "entry keeps the state its writer assigns: {pairs:#?}"
+        );
+        assert!(
+            validate_output_modules(&pairs)
+                .iter()
+                .all(|finding| finding.kind != OutputFindingKind::AssignToImport),
+            "no import write may remain: {pairs:#?}"
+        );
+    }
+}
+
+/// A demoted factory's synthesized cache or guard must not reuse a name the
+/// entry already declares: a `var` collision silently skips the factory body
+/// and a lexical collision is a duplicate declaration.
+#[test]
+fn demoted_factory_helpers_avoid_entry_declarations() {
+    let cjs = "var load = __commonJS((exports, module) => { ready = 1; module.exports = 1; });";
+    let esm = "var load = __esm(() => { ready = 1; });";
+    for (factory, existing, helper) in [
+        (cjs, "var __wakaru_load_cache = 42;", "__wakaru_load_cache"),
+        (cjs, "let __wakaru_load_cache = 42;", "__wakaru_load_cache"),
+        (
+            esm,
+            "var __wakaru_load_initialized = 42;",
+            "__wakaru_load_initialized",
+        ),
+        (
+            esm,
+            "let __wakaru_load_initialized = 42;",
+            "__wakaru_load_initialized",
+        ),
+    ] {
+        let bundle = format!(
+            r#"
+var __esm = (fn, value) => () => (fn && (value = fn(fn = 0)), value);
+var __commonJS = (cb, mod) => () => (mod || cb((mod = {{ exports: {{}} }}).exports, mod), mod.exports);
+var require_dummy = __commonJS((exports, module) => {{ module.exports = {{}}; }});
+{existing}
+var ready = 0;
+{factory}
+var reset = () => {{ ready = 2; }};
+load(); reset(); record([ready, {helper}]); record(require_dummy());
+"#
+        );
+        let pairs = expect_unpack_raw(&bundle);
+        let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+        assert!(
+            entry.contains("function load()")
+                && entry.contains(&format!("{helper} = 42"))
+                && entry.contains(&format!("{helper}$2")),
+            "the demoted helper must take a fresh name: {entry}"
+        );
+        assert_eq!(
+            entry.matches(&format!("{helper} = 42")).count(),
+            1,
+            "the existing declaration stays untouched: {entry}"
+        );
+        assert_eq!(validate_output_modules(&pairs), vec![]);
+        assert_eq!(
+            validate_output_modules(&expect_unpack(&bundle, "bundle.js")),
+            vec![]
+        );
+    }
+}
+
+/// One factory writing top-level state is still a writer group: the entry
+/// declaration moves into the factory and entry reads follow the import.
+#[test]
+fn single_factory_state_write_moves_entry_declaration() {
+    for factory in [
+        "var require_lib = __commonJS((exports, module) => { ready = true; module.exports = { read: () => ready }; });
+record(require_lib().read()); record(ready);",
+        "var init_lib = __esm(() => { ready = true; });
+init_lib(); record(ready); record(require_dummy());",
+    ] {
+        let bundle = format!(
+            r#"
+var __esm = (fn, value) => () => (fn && (value = fn(fn = 0)), value);
+var __commonJS = (cb, mod) => () => (mod || cb((mod = {{ exports: {{}} }}).exports, mod), mod.exports);
+var require_dummy = __commonJS((exports, module) => {{ module.exports = {{}}; }});
+var ready;
+{factory}
+"#
+        );
+        let pairs = expect_unpack_raw(&bundle);
+        let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+        assert!(
+            !entry.contains("var ready") && entry.contains("ready"),
+            "entry must not fork the factory-owned state: {pairs:#?}"
+        );
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(_, code)| code.contains("var ready"))
+                .count(),
+            1,
+            "the state must be declared exactly once: {pairs:#?}"
+        );
+        assert_eq!(validate_output_modules(&pairs), vec![]);
+        assert_eq!(
+            validate_output_modules(&expect_unpack(&bundle, "bundle.js")),
+            vec![]
+        );
+    }
+}
+
 /// A top-level initialization assignment is part of the mutable binding's
 /// ownership unit. If support writers make a standalone factory own the
 /// declaration, leaving the initializer in entry.js creates an assignment to
