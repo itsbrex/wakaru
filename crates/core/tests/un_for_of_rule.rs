@@ -215,6 +215,126 @@ fn for_of_uses_let_when_elem_reassigned() {
 }
 
 #[test]
+fn for_of_nested_write_keeps_computed_key_assignable() {
+    let input = r#"
+for (let i = 0, keys = Object.keys(input); i < keys.length; i++) {
+    let key = keys[i];
+    out[key = key.toUpperCase()] = input[key];
+}
+"#;
+    let expected = r#"
+for (let key of Object.keys(input)) {
+    out[key = key.toUpperCase()] = input[key];
+}
+"#;
+    assert_eq_normalized(&apply_with_level(input, RewriteLevel::Standard), expected);
+}
+
+#[test]
+fn for_of_nested_write_inventory_for_indexed_and_helper_loops() {
+    // Both recovery paths must inspect every write position in the remaining
+    // body, including writes underneath another assignment or update target.
+    let writes = [
+        "out[item = next()] = value;",
+        "out.value = item = next();",
+        "out[item++] = value;",
+        "out[item = next()]++;",
+        "[item] = values;",
+        "({ value: item } = source);",
+        "[other = item = next()] = values;",
+        "item ||= next();",
+        "(item)++;",
+        "for (item of values) { use(item); }",
+        "for (item in source) { use(item); }",
+        "save(() => { item = next(); });",
+        "use({ [item = next()]: value });",
+    ];
+    for body in writes {
+        let indexed = format!(
+            "for (let i = 0, arr = items; i < arr.length; i++) {{ let item = arr[i]; {body} }}"
+        );
+        let helper = format!(
+            "let step; for (const iterator = _createForOfIteratorHelperLoose(items); !(step = iterator()).done;) {{ let item = step.value; {body} }}"
+        );
+        let expected_body = body.replace("(item)++", "item++");
+        let expected = format!("for (let item of items) {{ {expected_body} }}");
+        for input in [indexed, helper] {
+            assert_eq_normalized(&apply_with_level(&input, RewriteLevel::Standard), &expected);
+        }
+    }
+}
+
+#[test]
+fn for_of_nested_write_analysis_excludes_other_bindings_and_properties() {
+    for body in [
+        "item.value = next();",
+        "item[index]++;",
+        "{ let item; out[item = next()] = value; }",
+        "save((item) => { item = next(); });",
+    ] {
+        let indexed = format!(
+            "for (let i = 0, arr = items; i < arr.length; i++) {{ let item = arr[i]; {body} }}"
+        );
+        let helper = format!(
+            "let step; for (const iterator = _createForOfIteratorHelperLoose(items); !(step = iterator()).done;) {{ let item = step.value; {body} }}"
+        );
+        let expected = format!("for (const item of items) {{ {body} }}");
+        for input in [indexed, helper] {
+            assert_eq_normalized(&apply_with_level(&input, RewriteLevel::Standard), &expected);
+        }
+    }
+}
+
+#[test]
+fn for_of_nested_write_keeps_destructured_binding_assignable() {
+    let input = r#"
+for (let i = 0; i < entries.length; i++) {
+    let pair = entries[i];
+    let key = pair[0];
+    let value = pair[1];
+    out[key = normalize(key)] = value;
+}
+"#;
+    let expected = r#"
+for (let [key, value] of entries) {
+    out[key = normalize(key)] = value;
+}
+"#;
+    assert_eq_normalized(&apply_with_level(input, RewriteLevel::Standard), expected);
+}
+
+#[test]
+fn for_of_preserves_writes_to_original_const_bindings() {
+    for (indexed_decls, helper_decls, body) in [
+        (
+            "const item = arr[i];",
+            "const item = step.value;",
+            "out[item = next()] = value;",
+        ),
+        (
+            "const item = arr[i];",
+            "const item = step.value;",
+            "item = next();",
+        ),
+        (
+            "const pair = arr[i]; const key = pair[0]; let value = pair[1];",
+            "const pair = step.value; const key = pair[0]; let value = pair[1];",
+            "out[key = next()] = value;",
+        ),
+    ] {
+        let indexed = format!(
+            "for (let i = 0, arr = items; i < arr.length; i++) {{ {indexed_decls} {body} }}"
+        );
+        let helper = format!(
+            "let step; for (const iterator = _createForOfIteratorHelperLoose(items); !(step = iterator()).done;) {{ {helper_decls} {body} }}"
+        );
+        for input in [indexed, helper] {
+            assert_eq_normalized(&apply_with_level(&input, RewriteLevel::Standard), &input);
+        }
+    }
+}
+
+#[test]
 fn for_of_single_decl_arr_form() {
     let input =
         r#"for (let Y = 0, V = B.split("."); Y < V.length; Y++) { const Z = V[Y]; process(Z); }"#;

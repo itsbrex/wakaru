@@ -9,6 +9,7 @@ use swc_core::ecma::ast::{
     Pat, SimpleAssignTarget, Stmt, TryStmt, UnaryExpr, UnaryOp, UpdateExpr, UpdateOp, VarDecl,
     VarDeclKind, VarDeclOrExpr, VarDeclarator,
 };
+use swc_core::ecma::utils::find_pat_ids;
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
 use crate::analysis::binding_uses::BindingUseIndex;
@@ -1125,9 +1126,13 @@ fn build_helper_for_of(
         return None;
     }
 
-    let is_reassigned = remaining_body
+    let body_uses = BindingUseIndex::collect_stmts(&remaining_body);
+    if writes_consumed_const(&body.stmts[..consumed_stmts], &body_uses) {
+        return None;
+    }
+    let is_reassigned = bindings
         .iter()
-        .any(|stmt| bindings.iter().any(|id| stmt_assigns_ident(stmt, id)));
+        .any(|id| body_uses.has_direct_write(&id.to_id()));
     let kind = if kind == VarDeclKind::Var {
         VarDeclKind::Var
     } else if is_reassigned {
@@ -1835,13 +1840,16 @@ fn try_convert_for_of(stmt: &Stmt, helper_context: &ForOfHelperContext) -> Optio
         }
     }
 
-    // Use `let` if the element variable is reassigned in the loop body, `const` otherwise
-    let elem_is_reassigned = remaining_body.iter().any(|stmt| {
-        element
-            .bindings
-            .iter()
-            .any(|id| stmt_assigns_ident(stmt, id))
-    });
+    // Analyze the remaining body after consuming the element declaration.
+    // Shared write analysis includes nested targets and distinguishes shadowed bindings.
+    let body_uses = BindingUseIndex::collect_stmts(remaining_body);
+    if writes_consumed_const(&block.stmts[..element.consumed_stmts], &body_uses) {
+        return None;
+    }
+    let elem_is_reassigned = element
+        .bindings
+        .iter()
+        .any(|id| body_uses.has_direct_write(&id.to_id()));
     let elem_kind = if element.kind == VarDeclKind::Var {
         VarDeclKind::Var
     } else if elem_is_reassigned {
@@ -1891,6 +1899,22 @@ struct LoopElement {
     kind: VarDeclKind,
     temp_ident: Option<Ident>,
     consumed_stmts: usize,
+}
+
+/// Recovery must not turn an existing const-write error into a valid write.
+/// Check individual declarations before their kinds are joined: a mixed
+/// const/let destructuring group cannot preserve both kinds in one loop head.
+fn writes_consumed_const(stmts: &[Stmt], body_uses: &BindingUseIndex) -> bool {
+    stmts.iter().any(|stmt| {
+        let Stmt::Decl(Decl::Var(decl)) = stmt else {
+            return false;
+        };
+        decl.kind == VarDeclKind::Const
+            && decl.decls.iter().any(|declarator| {
+                let bindings: Vec<BindingKey> = find_pat_ids(&declarator.name);
+                bindings.iter().any(|id| body_uses.has_direct_write(id))
+            })
+    })
 }
 
 /// Join declaration kinds for the bindings that survive in a recovered loop
@@ -2069,44 +2093,6 @@ fn same_ident_expr(left: &Expr, right: &Expr) -> bool {
         (Expr::Ident(left), Expr::Ident(right)) => left.sym == right.sym && left.ctxt == right.ctxt,
         _ => false,
     }
-}
-
-/// Check if a statement assigns to a specific binding (by sym + ctxt).
-fn stmt_assigns_ident(stmt: &Stmt, target: &Ident) -> bool {
-    use swc_core::ecma::ast::{AssignTarget, SimpleAssignTarget};
-    use swc_core::ecma::visit::Visit;
-
-    struct AssignFinder {
-        sym: Atom,
-        ctxt: SyntaxContext,
-        found: bool,
-    }
-
-    impl Visit for AssignFinder {
-        fn visit_assign_expr(&mut self, assign: &swc_core::ecma::ast::AssignExpr) {
-            if let AssignTarget::Simple(SimpleAssignTarget::Ident(id)) = &assign.left {
-                if id.sym == self.sym && id.ctxt == self.ctxt {
-                    self.found = true;
-                }
-            }
-        }
-
-        fn visit_update_expr(&mut self, update: &UpdateExpr) {
-            if let Expr::Ident(id) = &*update.arg {
-                if id.sym == self.sym && id.ctxt == self.ctxt {
-                    self.found = true;
-                }
-            }
-        }
-    }
-
-    let mut finder = AssignFinder {
-        sym: target.sym.clone(),
-        ctxt: target.ctxt,
-        found: false,
-    };
-    finder.visit_stmt(stmt);
-    finder.found
 }
 
 /// Check if a statement references a specific binding (by sym + ctxt).

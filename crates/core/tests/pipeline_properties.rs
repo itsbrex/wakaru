@@ -457,3 +457,23 @@ use(picked);
 "#;
     assert_pipeline_pair_valid(&[("provider.js", source)]);
 }
+
+#[test]
+fn for_of_nested_write_does_not_become_const() {
+    let source = r#"
+export function remap(input) {
+    var out = {};
+    for (var i = 0, keys = Object.keys(input); i < keys.length; i++) {
+        var key = keys[i];
+        out[key = key.toUpperCase()] = input[key];
+    }
+    return out;
+}
+"#;
+    assert_pipeline_pair_valid(&[("provider.js", source)]);
+    let output = render(source);
+    assert!(
+        output.contains("for (let key of Object.keys(input))"),
+        "{output}"
+    );
+}
