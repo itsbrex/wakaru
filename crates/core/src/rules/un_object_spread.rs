@@ -979,25 +979,33 @@ impl VisitMut for SpreadReplacer<'_> {
         // Merge all arguments into a single object expression.
         // - Object literal args: flatten their properties
         // - Everything else: wrap as spread element
-        let mut properties: Vec<PropOrSpread> = first_obj.props.clone();
+        // All rejection checks are complete. Consume the arguments so nested
+        // recoveries do not deep-clone the same function/object trees again at
+        // every enclosing helper call.
+        let mut args = std::mem::take(&mut call.args).into_iter();
+        let first = args.next().expect("nonempty arguments checked above");
+        let Expr::Object(first_obj) = *first.expr else {
+            unreachable!("fresh object target checked above");
+        };
+        let mut properties = first_obj.props;
 
-        for arg in &call.args[1..] {
+        for mut arg in args {
             if arg.spread.is_some() {
                 properties.push(PropOrSpread::Spread(SpreadElement {
                     dot3_token: DUMMY_SP,
-                    expr: restore_conditional_spread_branch_order(arg.expr.clone()),
+                    expr: restore_conditional_spread_branch_order(arg.expr),
                 }));
                 continue;
             }
 
-            match arg.expr.as_ref() {
+            match arg.expr.as_mut() {
                 Expr::Object(obj) if is_safe_to_inline_props(&obj.props) => {
-                    properties.extend(obj.props.iter().cloned());
+                    properties.append(&mut obj.props);
                 }
                 _ => {
                     properties.push(PropOrSpread::Spread(SpreadElement {
                         dot3_token: DUMMY_SP,
-                        expr: restore_conditional_spread_branch_order(arg.expr.clone()),
+                        expr: restore_conditional_spread_branch_order(arg.expr),
                     }));
                 }
             }

@@ -256,13 +256,15 @@ fn run_un_object_rest(
 
     // Process module-level statements
     let mut new_body = Vec::with_capacity(module.body.len());
-    let mut recent_stmts: Vec<Stmt> = Vec::new();
+    // Keep only the current statement-run boundary; look behind in new_body
+    // instead of retaining a deep-cloned copy of every emitted statement.
+    let mut recent_start = 0;
     let mut exclusion_arrays = exclusion_arrays;
 
     let mut items = std::mem::take(&mut module.body).into_iter();
     while let Some(item) = items.next() {
         let ModuleItem::Stmt(ref stmt) = item else {
-            recent_stmts.clear();
+            recent_start = new_body.len() + 1;
             new_body.push(item);
             continue;
         };
@@ -283,27 +285,28 @@ fn run_un_object_rest(
         {
             let future_jsx_tag_bindings = jsx_tag_bindings_in_module_items(items.as_slice());
             if has_jsx_tag_default_pair(
-                &recent_stmts,
+                &new_body[recent_start..],
                 &source,
                 &excluded_keys,
                 &future_jsx_tag_bindings,
                 unresolved_mark,
             ) {
                 collect_exclusion_arrays_from_stmt(stmt, &mut exclusion_arrays);
-                recent_stmts.push(stmt.clone());
                 new_body.push(item);
                 continue;
             }
             let mut inline_accesses = declarators_to_accesses(&before, &source, &excluded_keys);
-            let preceding_scan =
-                scan_preceding_detailed(&recent_stmts, &source, &excluded_keys, unresolved_mark);
+            let preceding_scan = scan_preceding_detailed(
+                &new_body[recent_start..],
+                &source,
+                &excluded_keys,
+                unresolved_mark,
+            );
             for _ in 0..preceding_scan.absorbed {
-                recent_stmts.pop();
                 new_body.pop();
             }
             if let Some(source_init) = preceding_scan.source_init.clone() {
                 let source_init_stmt = build_source_init_stmt(source_init);
-                recent_stmts.push(source_init_stmt.clone());
                 new_body.push(ModuleItem::Stmt(source_init_stmt));
             }
             let mut preceding_accesses = preceding_scan.accesses;
@@ -322,7 +325,6 @@ fn run_un_object_rest(
                     reserved_names: &reserved_names,
                 },
             );
-            recent_stmts.push(new_stmt.clone());
             new_body.push(ModuleItem::Stmt(new_stmt));
             if !after.is_empty() {
                 let after_stmt = Stmt::Decl(Decl::Var(Box::new(VarDecl {
@@ -332,7 +334,6 @@ fn run_un_object_rest(
                     declare: false,
                     decls: after,
                 })));
-                recent_stmts.push(after_stmt.clone());
                 new_body.push(ModuleItem::Stmt(after_stmt));
             }
             continue;
@@ -347,12 +348,16 @@ fn run_un_object_rest(
             &exclusion_arrays,
         ) {
             let original_span = stmt.span();
-            let preceding_scan =
-                scan_preceding_detailed(&recent_stmts, &source, &excluded_keys, unresolved_mark);
+            let preceding_scan = scan_preceding_detailed(
+                &new_body[recent_start..],
+                &source,
+                &excluded_keys,
+                unresolved_mark,
+            );
             let scope_names = collect_scope_names_module(&new_body);
             if preceding_scan.absorbed > 0 {
                 if let Some(new_stmts) = build_rest_assignment_with_declarations(
-                    &recent_stmts[recent_stmts.len() - preceding_scan.absorbed..],
+                    &new_body[new_body.len() - preceding_scan.absorbed..],
                     original_span,
                     &rest_binding,
                     &source,
@@ -361,16 +366,13 @@ fn run_un_object_rest(
                     &scope_names,
                 ) {
                     for _ in 0..preceding_scan.absorbed {
-                        recent_stmts.pop();
                         new_body.pop();
                     }
                     if let Some(source_init) = preceding_scan.source_init {
                         let source_init_stmt = build_source_init_stmt(source_init);
-                        recent_stmts.push(source_init_stmt.clone());
                         new_body.push(ModuleItem::Stmt(source_init_stmt));
                     }
                     for new_stmt in new_stmts {
-                        recent_stmts.push(new_stmt.clone());
                         new_body.push(ModuleItem::Stmt(new_stmt));
                     }
                     continue;
@@ -379,7 +381,6 @@ fn run_un_object_rest(
         }
 
         collect_exclusion_arrays_from_stmt(stmt, &mut exclusion_arrays);
-        recent_stmts.push(stmt.clone());
         new_body.push(item);
     }
     module.body = new_body;
@@ -2776,6 +2777,27 @@ fn stmt_has_member_prop(stmt: &Stmt, prop: &str) -> bool {
     finder.found
 }
 
+// Both statement lists and module-item lists can be inspected without copying
+// their ASTs. Module declarations terminate a statement run.
+trait PrecedingStatement {
+    fn statement(&self) -> Option<&Stmt>;
+}
+
+impl PrecedingStatement for Stmt {
+    fn statement(&self) -> Option<&Stmt> {
+        Some(self)
+    }
+}
+
+impl PrecedingStatement for ModuleItem {
+    fn statement(&self) -> Option<&Stmt> {
+        match self {
+            ModuleItem::Stmt(stmt) => Some(stmt),
+            ModuleItem::ModuleDecl(_) => None,
+        }
+    }
+}
+
 /// Scan backward from the end of `preceding` for statements that access `source`.
 /// Returns (count_absorbed, merged_prop_info).
 fn scan_preceding(
@@ -2794,8 +2816,8 @@ struct PrecedingScan {
     source_init: Option<AssignExpr>,
 }
 
-fn scan_preceding_detailed(
-    preceding: &[Stmt],
+fn scan_preceding_detailed<T: PrecedingStatement>(
+    preceding: &[T],
     source: &Expr,
     excluded_keys: &[Atom],
     unresolved_mark: Mark,
@@ -2818,7 +2840,9 @@ fn scan_preceding_detailed(
 
     while idx > 0 {
         idx -= 1;
-        let stmt = &preceding[idx];
+        let Some(stmt) = preceding[idx].statement() else {
+            break;
+        };
 
         if let Some((access, init_assign)) =
             try_match_preceding_detailed(stmt, source_name, excluded_keys)
@@ -2833,13 +2857,12 @@ fn scan_preceding_detailed(
 
         // Two-statement pair: ternary default (current) + extraction (previous)
         if idx > 0 {
-            if let Some(access) = try_match_default_pair(
-                &preceding[idx - 1],
-                stmt,
-                source_name,
-                excluded_keys,
-                unresolved_mark,
-            ) {
+            let Some(previous) = preceding[idx - 1].statement() else {
+                break;
+            };
+            if let Some(access) =
+                try_match_default_pair(previous, stmt, source_name, excluded_keys, unresolved_mark)
+            {
                 absorbed += 2;
                 idx -= 1;
                 accesses.push(access);
@@ -2858,8 +2881,8 @@ fn scan_preceding_detailed(
     }
 }
 
-fn has_jsx_tag_default_pair(
-    preceding: &[Stmt],
+fn has_jsx_tag_default_pair<T: PrecedingStatement>(
+    preceding: &[T],
     source: &Expr,
     excluded_keys: &[Atom],
     future_jsx_tag_bindings: &HashSet<BindingKey>,
@@ -2872,14 +2895,20 @@ fn has_jsx_tag_default_pair(
         Expr::Ident(id) => &id.sym,
         _ => return false,
     };
+    let (Some(previous), Some(current)) = (
+        preceding[preceding.len() - 2].statement(),
+        preceding[preceding.len() - 1].statement(),
+    ) else {
+        return false;
+    };
     let Some(PrecedingAccess::PropAccessWithDefault {
         prop,
         binding,
         ctxt,
         ..
     }) = try_match_default_pair(
-        &preceding[preceding.len() - 2],
-        &preceding[preceding.len() - 1],
+        previous,
+        current,
         source_name,
         excluded_keys,
         unresolved_mark,
@@ -3460,8 +3489,8 @@ fn build_rest_destructuring(
     })))
 }
 
-fn build_rest_assignment_with_declarations(
-    preceding: &[Stmt],
+fn build_rest_assignment_with_declarations<T: PrecedingStatement>(
+    preceding: &[T],
     original_span: Span,
     rest_binding: &BindingIdent,
     source: &Expr,
@@ -3471,6 +3500,7 @@ fn build_rest_assignment_with_declarations(
 ) -> Option<Vec<Stmt>> {
     let mut declarations = Vec::new();
     for stmt in preceding {
+        let stmt = stmt.statement()?;
         if let Stmt::Decl(Decl::Var(var)) = stmt {
             // Assignment recovery must not erase the local bindings it writes.
             // Only plain var property reads can be split into hoisted declarations

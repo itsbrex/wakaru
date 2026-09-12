@@ -1974,6 +1974,7 @@ function outer(obj) {
     var rest = __rest(obj, ["x"]);
     return [middle(), x, rest];
 }
+
 use(outer);
 "#;
     let expected = r#"
@@ -2034,4 +2035,36 @@ function extract(source) {{
         );
         assert_eq_normalized(&render_rule(&input, UnObjectRest::new), &input);
     }
+}
+
+#[test]
+fn module_declarations_reset_rest_lookbehind() {
+    for boundary in ["import 'side-effect';", "export var marker = 0;"] {
+        let source = format!(
+            "import {{ __rest }} from 'tslib';\nvar a = obj.a;\n{boundary}\n\
+             var rest = __rest(obj, ['a']);\nuse(a, rest);"
+        );
+        let output = render_rule(&source, UnObjectRest::new);
+        assert!(output.contains("var a = obj.a;"), "{output}");
+        assert!(!output.contains("__rest("), "{output}");
+        assert!(output.contains("use(a, rest)"), "{output}");
+    }
+}
+
+#[test]
+fn rest_lookbehind_tracks_rebuilt_module_statements() {
+    let source = r#"
+import { __rest } from 'tslib';
+var x = obj.x;
+var first = __rest(obj, ['x']);
+var y = other.y;
+var second = __rest(other, ['y']);
+use(x, first, y, second);
+"#;
+    let expected = r#"
+var { x, ...first } = obj;
+var { y, ...second } = other;
+use(x, first, y, second);
+"#;
+    assert_eq_normalized(&render_rule(source, UnObjectRest::new), expected);
 }

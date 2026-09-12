@@ -149,3 +149,22 @@ each pass on its own trigger or to leave the recovery alone.
 - Accumulated rule sums on the large bundle are now flat (the top rule is
   about 7%); further per-rule work has diminishing returns compared with the
   cross-cutting items above.
+
+## Allocation follow-up, September 12
+
+Object-rest's module-level recovery still deep-cloned every emitted statement
+into a second history vector for its backward proofs, even after the output
+rebuild itself became move-based. Borrowing the rebuilt output instead cut
+full-core allocation request bytes by 1.7–8.0% across three full-unpack
+inputs. Object-spread recovery cloned the argument trees of nested helper
+calls once per enclosing call; moving them removes that repeated copying but
+changes allocation on the same inputs by at most 0.03%. Timing moved between
+flat and about 3% better. Neither change is a throughput claim. Extra
+parallel esbuild factory metadata analysis was also tried and dropped because
+end-to-end timing showed no gain.
+
+`cargo run -p wakaru-core --example allocation_probe -- <rule|pipeline|unpack> input.js output`
+counts allocator requests around one rule, the rule pipeline, or a one-worker
+unpack, using the System allocator in the dev profile. Counts repeat exactly
+between runs, so they are a deterministic complement to the timing rules
+above. They measure allocation traffic, not peak memory or latency.

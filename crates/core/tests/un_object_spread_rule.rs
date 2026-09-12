@@ -7,6 +7,57 @@ use wakaru_core::facts::{
 use wakaru_core::rules::UnObjectSpread;
 
 #[test]
+fn nested_spread_recovery_moves_function_subtrees() {
+    use swc_core::common::Mark;
+    use swc_core::ecma::ast::{FnExpr, Function, Module};
+    use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+
+    #[derive(Default)]
+    struct Functions(Vec<*const Function>);
+    impl Visit for Functions {
+        fn visit_fn_expr(&mut self, expr: &FnExpr) {
+            self.0.push(expr.function.as_ref() as *const Function);
+            expr.visit_children_with(self);
+        }
+    }
+
+    struct CheckAllocations(Mark);
+    impl VisitMut for CheckAllocations {
+        fn visit_mut_module(&mut self, module: &mut Module) {
+            let mut before = Functions::default();
+            module.visit_with(&mut before);
+            module.visit_mut_with(&mut UnObjectSpread::new_with_mark(self.0));
+            let mut after = Functions::default();
+            module.visit_with(&mut after);
+            assert_eq!(before.0.len(), 4);
+            assert_eq!(
+                before.0, after.0,
+                "spread recovery must move argument trees"
+            );
+        }
+    }
+
+    let input = r#"
+import _extends from "@babel/runtime/helpers/extends";
+var value = _extends(
+    { first: function first() { return 1; } },
+    _extends({}, { second: function second() { return 2; } }),
+    source(function third() { return 3; }),
+    { method() { return function fourth() { return 4; }; } }
+);
+"#;
+    let expected = r#"
+var value = {
+    first: function first() { return 1; },
+    second: function second() { return 2; },
+    ...source(function third() { return 3; }),
+    ...{ method() { return function fourth() { return 4; }; } }
+};
+"#;
+    assert_eq_normalized(&render_rule(input, CheckAllocations), expected);
+}
+
+#[test]
 fn replaces_object_spread2_with_spread_syntax() {
     let input = r#"
 var _objectSpread2 = require("@babel/runtime/helpers/objectSpread2");
