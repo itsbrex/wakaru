@@ -446,7 +446,10 @@ rationale, or level gating appear.
 - **UnUndefinedInit** — needs RemoveVoid; feeds VarDeclToLetConst.
 - **UnPrototypeClass** — runs before ArrowFunction so Closure Compiler's
   single-declarator anonymous function initializers remain available for class
-  recovery. It also accepts ordinary function declarations. Nested candidates
+  recovery. It also accepts ordinary function declarations. A constructor sharing
+  an enclosing function parameter name stays in prototype form: replacing its
+  function declaration with a lexical class would make the body invalid. This
+  guard applies to the direct function body, not independently nested scopes. Nested candidates
   must have reached `const` through VarDeclToLetConst; module-level Closure
   variables are handled in place. Function-variable candidates with exact-binding
   pre-references (including references captured by earlier closures), multiple

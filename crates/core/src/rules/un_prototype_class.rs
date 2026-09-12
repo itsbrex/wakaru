@@ -3,11 +3,12 @@ use crate::collections::{HashMap, HashSet};
 use swc_core::atoms::Atom;
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
-    AssignOp, AssignTarget, CallExpr, Callee, Class, ClassDecl, ClassMember, ClassMethod,
-    Constructor, Decl, Expr, ExprOrSpread, ExprStmt, FnExpr, Function, FunctionBody, Ident,
-    IdentName, Lit, MemberProp, MethodKind, ModuleDecl, ModuleItem, Param, ParamOrTsParamProp, Pat,
-    PropName, SimpleAssignTarget, Stmt, VarDeclKind,
+    ArrowExpr, ArrowFunctionBody, AssignOp, AssignTarget, CallExpr, Callee, Class, ClassDecl,
+    ClassMember, ClassMethod, Constructor, Decl, Expr, ExprOrSpread, ExprStmt, FnExpr, Function,
+    FunctionBody, Ident, IdentName, Lit, MemberProp, MethodKind, ModuleDecl, ModuleItem, Param,
+    ParamOrTsParamProp, Pat, PropName, SimpleAssignTarget, Stmt, VarDeclKind,
 };
+use swc_core::ecma::utils::find_pat_ids;
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
 use crate::utils::paren::strip_parens;
@@ -28,7 +29,45 @@ impl VisitMut for UnPrototypeClass {
 
     fn visit_mut_stmts(&mut self, stmts: &mut Vec<Stmt>) {
         stmts.visit_mut_children_with(self);
-        transform_stmts(stmts);
+        transform_stmts(stmts, &[]);
+    }
+
+    fn visit_mut_function(&mut self, function: &mut Function) {
+        let mut body = function.body.take();
+        function.visit_mut_children_with(self);
+        if let Some(body) = &mut body {
+            self.visit_parameter_body(body, &find_pat_ids::<_, BindingKey>(&function.params));
+        }
+        function.body = body;
+    }
+
+    fn visit_mut_constructor(&mut self, constructor: &mut Constructor) {
+        let mut body = constructor.body.take();
+        constructor.visit_mut_children_with(self);
+        if let Some(body) = &mut body {
+            self.visit_parameter_body(body, &find_pat_ids::<_, BindingKey>(&constructor.params));
+        }
+        constructor.body = body;
+    }
+
+    fn visit_mut_arrow_expr(&mut self, arrow: &mut ArrowExpr) {
+        arrow.params.visit_mut_with(self);
+        match &mut *arrow.body {
+            ArrowFunctionBody::FunctionBody(body) => {
+                self.visit_parameter_body(body, &find_pat_ids::<_, BindingKey>(&arrow.params));
+            }
+            ArrowFunctionBody::Expr(expr) => expr.visit_mut_with(self),
+        }
+    }
+}
+
+impl UnPrototypeClass {
+    fn visit_parameter_body(&mut self, body: &mut FunctionBody, parameters: &[BindingKey]) {
+        // A function declaration may share a parameter's binding; a class in
+        // the same body may not even reuse its emitted name. Visit nested
+        // scopes normally, then guard only this body's direct declarations.
+        body.stmts.visit_mut_children_with(self);
+        transform_stmts(&mut body.stmts, parameters);
     }
 }
 
@@ -132,9 +171,16 @@ fn transform_module_items(items: &mut Vec<ModuleItem>) {
     }
 }
 
-fn transform_stmts(stmts: &mut Vec<Stmt>) {
+fn transform_stmts(stmts: &mut Vec<Stmt>, parameters: &[BindingKey]) {
     let stmt_opts: Vec<Option<&Stmt>> = stmts.iter().map(Some).collect();
-    let candidates = find_candidates(&stmt_opts, false);
+    let candidates: Vec<_> = find_candidates(&stmt_opts, false)
+        .into_iter()
+        .filter(|candidate| {
+            !parameters
+                .iter()
+                .any(|(name, _)| *name == candidate.binding.0)
+        })
+        .collect();
     if candidates.is_empty() {
         return;
     }

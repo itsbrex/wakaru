@@ -53,6 +53,38 @@ fn apply_resolved(input: &str) -> String {
 // ============================================================
 
 #[test]
+fn enclosing_parameter_preserves_function_constructor() {
+    let constructor = "function C(x) { this.x = x; } C.prototype.read = function() { return this.x; }; return new C(1).read();";
+    for input in [
+        format!("function outer(C) {{ {constructor} }}"),
+        format!("const outer = function(C) {{ {constructor} }};"),
+        format!("const outer = (C) => {{ {constructor} }};"),
+        format!("const outer = ({{ value: C }}) => {{ {constructor} }};"),
+        format!("const outer = {{ run(C) {{ {constructor} }} }};"),
+        format!("class Outer {{ constructor(C) {{ {constructor} }} }}"),
+    ] {
+        assert_eq_normalized(&apply_resolved(&input), &input);
+    }
+}
+
+#[test]
+fn parameter_in_outer_scope_does_not_block_nested_class() {
+    let input = "function outer(C) { function inner() { function C(x) { this.x = x; } C.prototype.read = function() { return this.x; }; return new C(1); } return inner(); }";
+    let output = apply_resolved(input);
+    assert!(output.contains("class C"), "{output}");
+    let block = "function outer(C) { { function C(x) { this.x = x; } C.prototype.read = function() { return this.x; }; use(C); } return C; }";
+    let output = apply_resolved(block);
+    assert!(output.contains("class C"), "{output}");
+}
+
+#[test]
+fn parameter_collision_pipeline_preserves_parseable_output() {
+    let output = render("function outer(C) { function C(x) { this.x = x; } C.prototype.read = function() { return this.x; }; return new C(1).read(); } console.log(outer(null));");
+    assert!(!output.contains("class C"), "{output}");
+    assert!(output.contains("function C"), "{output}");
+}
+
+#[test]
 fn duplicate_constructor_params_preserve_prototype_shape() {
     let input = r#"
 function Foo(a, a) {
