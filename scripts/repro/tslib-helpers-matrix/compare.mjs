@@ -76,6 +76,16 @@ function moduleParts(code) {
     } else if (ts.isExportDeclaration(statement) && !statement.moduleSpecifier
       && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
       exports.push(...statement.exportClause.elements);
+    } else if (ts.isVariableStatement(statement)
+      && statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
+      // Keep public names outside the alpha-renamed declaration, just as for
+      // functions/classes. Do not fold initializers or assignment statements.
+      if (!statement.declarationList.declarations.every((decl) => ts.isIdentifier(decl.name))) return null;
+      exports.push(...statement.declarationList.declarations.map((decl) =>
+        ts.factory.createExportSpecifier(false, undefined, decl.name)));
+      body.push(printer.printNode(ts.EmitHint.Unspecified, ts.factory.replaceModifiers(
+        statement, statement.modifiers.filter((m) => m.kind !== ts.SyntaxKind.ExportKeyword),
+      ), file));
     } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement))
       && statement.name && statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
       // Preserve default declarations exactly: splitting them can change a

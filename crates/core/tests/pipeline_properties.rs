@@ -477,3 +477,13 @@ export function remap(input) {
         "{output}"
     );
 }
+
+#[test]
+fn class_temporary_initialization_recovers_direct_export() {
+    // The private-field pass leaves this shape after consuming the WeakMap
+    // initialization in a TypeScript class-expression factory.
+    let source = "let temp; temp = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } }; export const Foo = temp;";
+    let expected = "export const Foo = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } };";
+    common::assert_eq_normalized(&render(source), expected);
+    assert_pipeline_pair_valid(&[("provider.js", source)]);
+}

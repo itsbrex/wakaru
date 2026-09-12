@@ -77,24 +77,18 @@ test("default class exports retain their spelling unless an alternate form is ex
   assert.equal(matches(split.replace("export default Foo", "export default other"), { source, acceptForms: [split] }), false);
 });
 
-test("class-expression alternate form still requires the complete recovered module", () => {
-  const source = "const Foo = class { #x = 1; getX() { return this.#x; } }; export { Foo };";
-  const split = "export let Foo; Foo = class { #x = 1; getX() { return this.#x; } };";
-  const snippet = { source, acceptForms: [split] };
-  assert.ok(matches(split, snippet));
-  assert.equal(matches(split.replace("Foo = class", "observe(Foo); Foo = class"), snippet), false);
-  assert.equal(matches(split + "Foo = other;", snippet), false);
-  assert.equal(matches(split.replace("this.#x", "get(this, map)"), snippet), false);
-});
-
-test("class-expression snapshot alternative preserves its single initialization and export", () => {
+test("class-expression recovery requires the direct initializer and original export", () => {
   const source = "const Foo = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } }; export { Foo };";
+  const recovered = "export const Foo = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } };";
+  const split = "export let Foo; Foo = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } };";
   const snapshot = "let temp; temp = class { #x = 1; getX() { return this.#x; } setX(value) { this.#x = value; } }; export const Foo = temp;";
-  const snippet = { source, acceptForms: [snapshot] };
-  assert.equal(matches(snapshot, { source }), false);
-  assert.ok(matches(snapshot, snippet));
-  assert.equal(matches(snapshot.replace("export const Foo", "observe(temp); export const Foo"), snippet), false);
-  assert.equal(matches(snapshot + "temp = other;", snippet), false);
-  assert.equal(matches(snapshot.replace("Foo = temp", "Foo = other"), snippet), false);
-  assert.equal(matches(snapshot.replace("this.#x", "get(this, map)"), snippet), false);
+  const snippet = { source };
+  assert.ok(matches(recovered, snippet));
+  assert.equal(matches(recovered.replace("export ", ""), snippet), false);
+  assert.equal(matches(recovered.replace("const Foo", "let Foo"), snippet), false);
+  assert.equal(matches(split, snippet), false);
+  assert.equal(matches(snapshot, snippet), false);
+  assert.equal(matches(recovered + "Foo = other;", snippet), false);
+  assert.equal(matches(recovered.replace("const Foo", "const Other"), snippet), false);
+  assert.equal(matches(recovered.replace("this.#x", "get(this, map)"), snippet), false);
 });

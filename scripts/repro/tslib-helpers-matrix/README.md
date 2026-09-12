@@ -44,8 +44,10 @@ tool cache.
 The matrix compares the **complete module** with the modern source or an
 explicit `acceptForms` alternative, using the shared `debug normalize --rename`
 comparison. This applies to raw output too: tsc itself renames provider imports.
-The local comparison adapter canonicalizes `export function f` and
-`function f; export { f }` to the same export spelling/placement. Public export
+The local comparison adapter canonicalizes export spelling/placement for
+functions, classes, and variable declarations with identifier bindings. For
+example, `export const Foo = class ...` and `const Foo = class ...; export { Foo }`
+share the same body and public export. Public export
 names, other imports, declarations, expressions, and side effects still need
 to match. It accepts destructuring moved into a parameter via explicit alternate
 forms; it does not accept unrecovered indexing as equivalent destructuring.
@@ -53,16 +55,14 @@ forms; it does not accept unrecovered indexing as equivalent destructuring.
 Private-field snippets cover named class exports, a default class export, and
 an exported class expression. The default-export fixture explicitly accepts a
 separate `export default Foo` because `Foo` is never reassigned. The class-expression
-fixture also accepts an adjacent `export let Foo; Foo = class ...` form: that
-specific class has no definition-time effects and no later binding writes, so
-nothing observes the intermediate binding value. It also accepts that same
-single class assignment through a local temporary followed by
-`export const Foo = temp`. `UnExportRename` preserves this snapshot because the
-temporary is written; its conservative write guard does not distinguish the
-single initialization from later writes. The explicit alternative contains
-no extra calls or subsequent writes and still requires the original export.
-These are complete-module alternatives for those snippets, not general
-declaration/export normalization.
+fixture requires the direct class initializer. `MergeDeclarationInit` folds an
+adjacent bare declaration and inert anonymous class assignment, then the late
+export rename removes the immutable alias. Split class assignments and local
+temporary/export-snapshot forms no longer count as recovered. Heritage,
+computed keys, decorators, static initialization, and references to the outer
+binding remain outside this narrow merge. The class-expression fixture has no
+alternate initialization forms. The default-export alternative remains a
+complete-module alternative, not general declaration/export normalization.
 Extra calls, reassignment, and unrecovered helper uses still fail comparison.
 Rule tests separately cover direct `export default class`, an intervening default
 export, single-declarator class expressions, and their lifetime hazards.
