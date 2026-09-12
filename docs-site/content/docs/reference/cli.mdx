@@ -60,10 +60,11 @@ source-map, bytecode, and module-info regions. Bun 1.3.3+ is supported.
 ## Rewrite level
 
 ```bash
-wakaru input.js --level minimal|standard|aggressive
+wakaru input.js --level minimal
 wakaru input.js --dce                # full dead-code reachability sweep
 ```
 
+Choose `minimal`, `standard` (the default), or `aggressive`.
 See [Rewrite levels](/guides/rewrite-levels).
 
 ## Source maps

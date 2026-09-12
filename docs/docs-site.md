@@ -62,13 +62,12 @@ Local preview: `cd docs-site && npm run dev`, then open
   change updates `docs/cli.md`, `skills/wakaru/SKILL.md`, and
   `docs-site/content/docs/reference/cli.mdx` in the same commit. The
   AGENTS.md task table names all three.
-- **Stats figures.** The Correctness page cites the repro aggregate
-  (`97.4% across 1,858 test shapes`) and the Test262 totals.
+- **Stats figures.** The Correctness page cites the repro aggregate and
+  the Test262 totals.
   `scripts/repro/collect-stats.mjs --check` verifies the repro citation on
   README, the landing page, and the Correctness page; regenerating stats
-  without moving the copy fails the check. The Test262 figures are not
-  checked by a script: when `scripts/correctness/test262-stats.json`
-  changes, update the Correctness page by hand.
+  without moving the copy fails the check. When Test262 totals change in
+  `scripts/correctness/test262-stats.json`, update the Correctness page too.
 - **Playground features.** The Playground guide describes the controls and
   modes. A playground UI change that adds or renames a control updates that
   page.

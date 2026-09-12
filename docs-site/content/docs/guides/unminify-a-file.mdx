@@ -23,7 +23,7 @@ machine comes back as `async`/`await`, `_createClass` wiring comes back as a
 
 Mangled names like `e` and `t` mostly stay short. Wakaru applies
 conservative renaming heuristics where the code gives evidence, and stops
-there. Two ways to get real names back:
+there. Some ways to improve names:
 
 - A source map with original names. See [Source maps](/guides/source-maps).
 - An LLM renamer like [humanify](https://github.com/jehna/humanify), if

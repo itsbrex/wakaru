@@ -6,8 +6,8 @@ description: What to check when Wakaru refuses, warns, or returns less than you 
 ## The output directory already exists
 
 Wakaru refuses to write into a directory that is not empty, and refuses to
-overwrite an existing output file. Pass `--force` to allow it. `--force`
-overwrites, so point it at a directory you are happy to lose.
+overwrite an existing output file. Pass `--force` to allow overwrites.
+Use a fresh directory to avoid mixing new output with files from an earlier run.
 
 ## The bundle came out as one file
 
@@ -59,10 +59,10 @@ the fields.
 
 ## Very large inputs are slow or run out of memory
 
-Memory follows the largest module after splitting, not the size of the
-input. A bundle that unpacks into many small modules is fine at almost any
-size. An input that does not split keeps one giant syntax tree alive through
-the whole run and can use many gigabytes.
+Peak memory depends heavily on the largest module after splitting.
+Splitting a bundle into many small modules reduces that cost. An input that
+does not split keeps one giant syntax tree alive through the whole run and
+can use many gigabytes.
 
 - Confirm the bundle actually splits. `--json` reports the module count.
 - Give Wakaru the entry and its chunks as separate files, not one
@@ -72,11 +72,13 @@ the whole run and can use many gigabytes.
 
 ## The output looks different from the input
 
-That is the point. Wakaru rewrites the syntax tree, so the shape changes
-while the behavior stays the same. If the output *behaves* differently, that
-is a bug we want to hear about. [Open an issue](https://github.com/pionxzh/wakaru/issues)
-with the input, reduced if you can. See [Correctness](/project/correctness)
-for what each level promises.
+Changes such as helpers becoming `async` functions or `require` becoming
+`import` are expected. [Rewrite levels](/guides/rewrite-levels) explain
+which recovery choices may affect behavior.
+
+If the output behaves differently, [open an issue](https://github.com/pionxzh/wakaru/issues)
+with your Wakaru version, command, input, and the behavior you expected.
+A small reproduction helps, but you do not need to diagnose the cause first.
 
 ## Vue SFC recovery returned JavaScript
 
