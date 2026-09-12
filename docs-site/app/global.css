@@ -12,8 +12,9 @@ html > body[data-scroll-locked] {
 }
 
 /* Landing palette (website/styles.css :root). Dark is the primary look and
-   the default theme; light keeps the neutral preset with the landing blue. */
+   the default theme; light uses an off-white background with the landing blue. */
 :root {
+  --color-fd-background: #fafafa;
   --color-fd-primary: #3d6fce;
   --color-fd-ring: #3d6fce;
 }
