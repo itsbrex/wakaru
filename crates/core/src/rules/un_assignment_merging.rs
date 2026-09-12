@@ -1,9 +1,11 @@
 use crate::collections::HashSet;
+use crate::utils::paren::strip_parens;
+use crate::utils::prototype_members::is_prototype_mutating_member_name;
 
 use swc_core::common::{Mark, SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
     AssignExpr, AssignOp, AssignTarget, Expr, ExprStmt, Ident, Lit, MemberExpr, MemberProp,
-    ModuleItem, SimpleAssignTarget, Stmt,
+    ModuleItem, SimpleAssignTarget, Stmt, UnaryOp,
 };
 use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
@@ -24,9 +26,11 @@ use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 /// - a member rooted at the CommonJS wrapper bindings `module`, `exports`, or
 ///   `require`, which the wrapper always defines (`exports.foo = exports.bar
 ///   = 1`, `module.exports = exports = fn`).
-///   A receiver containing another member read (`module.exports.a`) is not
-///   accepted: an inner write may replace that intermediate object, even when
-///   every property is an ordinary data property.
+/// - a chain consisting only of static `module.exports.name` stores, under
+///   `commonjs_exports_data_properties`. These stores cannot replace the
+///   `module.exports` slot. Mixed roots, root writes, prototype mutations, and
+///   the `exports` key (which could replace the slot if module.exports aliases
+///   module itself) are excluded. No receiver capture is introduced.
 ///
 /// Keys must be identifiers, private names, or string/number literals. Any
 /// other target keeps the chain: a local root may be in TDZ or be reassigned
@@ -35,7 +39,8 @@ use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 /// There is no level gating.
 ///
 /// The split also evaluates the value once per target instead of once. A
-/// literal cannot change, but an identifier can if an earlier write runs user
+/// primitive literal or `void <number>` cannot change, but an identifier can
+/// if an earlier write runs user
 /// code that reassigns it (`o.a = o.b = value` with a `b` setter). An
 /// identifier value is therefore accepted only when the writes are resolved
 /// identifier targets, which run no code, or the CommonJS targets above. The
@@ -46,14 +51,16 @@ use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 /// undeclared global identifier target may be an accessor on the global
 /// object, so it splits only with a literal value.
 ///
-/// Keeping those chains is not a recovery loss. Minifiers only form a chain
+/// Other member chains remain intact. Minifiers only form a chain
 /// when the inner target is an identifier (`a = v; b.c = a` becomes
 /// `b.c = a = v`; swc's `merge_sequential_expr` requires `as_ident()` on the
 /// merged target), which the identifier case above reverses. Member-only
 /// chains such as `o.x = o.y = v`, flag tables `t[A] = t[B] = true`, and
 /// TypeScript's synthesized `exports.A = exports.B = void 0` are how the
-/// source was written or generated, so they are already in source form. The
-/// CommonJS exception rests on the same fact TypeScript relies on when it
+/// source was written or generated. CommonJS initialization chains are split
+/// so UnEsm can classify every export in one pass, even when RemoveVoid must
+/// retain `void 0` because of dynamic scope. The CommonJS exception rests on
+/// the same fact TypeScript relies on when it
 /// synthesizes that chain: the module owns its `exports` object.
 ///
 /// A `standard`-only extension for chains whose targets share one root was
@@ -194,15 +201,73 @@ impl UnAssignmentMerging {
 /// Every target must be a reference whose evaluation cannot throw, run user
 /// code, or observe the other writes. See the type-level docs for the list.
 fn targets_are_stable_references(assign: &AssignExpr, unresolved_ctxt: SyntaxContext) -> bool {
+    let nested_export_chain = is_stable_module_export_member(&assign.left, unresolved_ctxt);
     let mut current = assign;
     loop {
-        if !target_is_stable_reference(&current.left, unresolved_ctxt) {
+        let stable = if nested_export_chain {
+            is_stable_module_export_member(&current.left, unresolved_ctxt)
+        } else {
+            target_is_stable_reference(&current.left, unresolved_ctxt)
+        };
+        if !stable {
             return false;
         }
         match current.right.as_ref() {
             Expr::Assign(next) if next.op == AssignOp::Assign => current = next,
             _ => return true,
         }
+    }
+}
+
+/// This whole-chain alternative does not broaden the generic member-root
+/// check. In particular, `module.exports.a = module.exports = value` must keep
+/// the receiver captured by the source expression and cannot use this path.
+fn is_stable_module_export_member(target: &AssignTarget, unresolved_ctxt: SyntaxContext) -> bool {
+    let AssignTarget::Simple(SimpleAssignTarget::Member(member)) = target else {
+        return false;
+    };
+    if !is_static_member_key(&member.prop) {
+        return false;
+    }
+    if let Some(name) = static_member_name(&member.prop) {
+        if name == "exports" || is_prototype_mutating_member_name(name) {
+            return false;
+        }
+    }
+    let Expr::Member(exports) = strip_parens(&member.obj) else {
+        return false;
+    };
+    if static_member_name(&exports.prop) != Some("exports") {
+        return false;
+    }
+    matches!(strip_parens(&exports.obj), Expr::Ident(module)
+        if module.ctxt == unresolved_ctxt && module.sym == "module")
+}
+
+/// Static keys match `member_has_stable_root`: identifiers plus string or
+/// number literals. Only named keys can be the excluded `exports` or
+/// prototype-mutating members.
+fn is_static_member_key(prop: &MemberProp) -> bool {
+    match prop {
+        MemberProp::Ident(_) => true,
+        MemberProp::Computed(key) => {
+            matches!(
+                strip_parens(&key.expr),
+                Expr::Lit(Lit::Str(_) | Lit::Num(_))
+            )
+        }
+        MemberProp::PrivateName(_) => false,
+    }
+}
+
+fn static_member_name(prop: &MemberProp) -> Option<&str> {
+    match prop {
+        MemberProp::Ident(name) => Some(name.sym.as_ref()),
+        MemberProp::Computed(key) => match strip_parens(&key.expr) {
+            Expr::Lit(Lit::Str(name)) => name.value.as_str(),
+            _ => None,
+        },
+        MemberProp::PrivateName(_) => None,
     }
 }
 
@@ -240,13 +305,16 @@ fn is_commonjs_scope_binding(name: &str) -> bool {
     matches!(name, "module" | "exports" | "require")
 }
 
-/// A "simple" value is an identifier or a primitive literal.
+/// A "simple" value is an identifier, primitive literal, or pure `void <number>`.
 /// Regex literals are excluded: each evaluation creates a new object,
 /// so cloning would break identity and shared `lastIndex` state.
 fn is_simple_value(expr: &Expr) -> bool {
     match expr {
         Expr::Ident(_) => true,
         Expr::Lit(lit) => !matches!(lit, swc_core::ecma::ast::Lit::Regex(_)),
+        Expr::Unary(unary) if unary.op == UnaryOp::Void => {
+            matches!(strip_parens(&unary.arg), Expr::Lit(Lit::Num(_)))
+        }
         _ => false,
     }
 }

@@ -55,6 +55,35 @@ UnWebpackInterop (pass 1, soft) ────────────────
                                        UnWebpackInterop2
 ```
 
+UnAssignmentMerging owns safe chained-assignment normalization, including
+pure `void <number>` values when RemoveVoid cannot introduce `undefined`.
+Its CommonJS receiver checks allow static stores on one `module.exports`
+object while retaining chains that would need a receiver or value capture.
+UnEsm does not duplicate this splitter. It recovers a remaining top-level
+named-export chain as one operation: a repeatable value (identifier,
+primitive literal, `void <number>`) is stored per target; a function or
+arrow expression, or a `require("literal")` call, is evaluated once into a
+fresh `var` named after the innermost free export name, and every target,
+including a `module.exports` slot or resolved local head, stores that
+binding, so recovered exports stay snapshots. Creating a function runs no
+code, and the require form takes the same provider-ordering deviation as the
+single `exports.name = require(...)` recovery (`import_hoisting_eagerness`),
+so no module-wide receiver analysis is needed; any other effectful value
+stays whole.
+`module.exports = exports.default = value` becomes the default-export mirror
+pair. The normalization skips a module with direct eval or `with`, because
+the recovered exports become module bindings. A chain UnEsm cannot recover
+this way (an effectful non-function value, inside control flow or an
+initializer, a non-static key or the `exports` key, a `module.exports.default`
+mirror, several targets beside a default, or other target kinds) keeps the
+whole module at the CommonJS boundary before import/export classification.
+The coupled form
+`module.exports = exports = value` is not a named-export chain (its inner
+target is the `exports` binding) and keeps its separate whole-module
+recovery. A single static export followed only by resolved local assignments
+stays on the existing classification path, preserving enum and decorator
+recovery.
+
 Other hard chains (consumer directly matches the producer's output shape):
 
 ```

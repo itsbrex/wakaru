@@ -2446,7 +2446,7 @@ export { _in as in };
 fn named_export_does_not_capture_existing_global_reference() {
     let input = r#"
 var marker = typeof runtime !== "undefined" && runtime.pid ? runtime.pid : "";
-module.exports = module.exports.default = function() {
+module.exports = function() {
     return marker;
 };
 module.exports.runtime = function() {
@@ -2455,7 +2455,7 @@ module.exports.runtime = function() {
 "#;
     let expected = r#"
 const marker = typeof runtime !== "undefined" && runtime.pid ? runtime.pid : "";
-export default module.exports.default = () => marker;
+export default function() { return marker; };
 const _runtime = () => marker;
 export { _runtime as runtime };
 "#;
@@ -4158,4 +4158,223 @@ export default value;
         wakaru_core::rules::UnEsm::new(mark, RewriteLevel::Standard)
     });
     assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn chained_export_initializers_do_not_duplicate_recovered_bindings() {
+    for root in ["exports", "module.exports"] {
+        for value in ["void 0", "undefined"] {
+            for count in [2, 3, 8] {
+                let names: Vec<_> = (0..count).map(|index| format!("value{index}")).collect();
+                let chain = names
+                    .iter()
+                    .map(|name| format!("{root}.{name} = "))
+                    .collect::<String>();
+                let declarations = names
+                    .iter()
+                    .map(|name| format!("const {name} = () => 1; {root}.{name} = {name};"))
+                    .collect::<String>();
+                let source = format!("{chain}{value}; {declarations} function dynamic(code) {{ return eval(code); }}");
+                let once = common::render_pipeline_between(&source, "UnCurlyBraces", "UnEsm");
+                let twice = common::render_pipeline_between(&once, "UnCurlyBraces", "UnEsm");
+                assert_eq_normalized(&once, &twice);
+                assert!(
+                    !once.contains("exports."),
+                    "initializer must be fully consumed: {once}"
+                );
+                let findings = validate_output_modules(&[("entry.js".into(), twice.clone())]);
+                assert!(findings.is_empty(), "{findings:?}\n{twice}");
+                for name in &names {
+                    assert!(
+                        twice.contains(&format!("export const {name} =")),
+                        "missing value: {twice}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn chained_export_initializers_preserve_effectful_and_shadowed_values() {
+    for source in [
+        "exports.left = exports.right = void sideEffect();",
+        "const undefined = sideEffect(); exports.left = exports.right = undefined;",
+        "const exports = {}; exports.left = exports.right = void 0;",
+        "const module = { exports: {} }; module.exports.left = module.exports.right = void 0;",
+    ] {
+        let output = common::render_rule(source, |mark| {
+            wakaru_core::rules::UnEsm::new(mark, RewriteLevel::Standard)
+        });
+        assert_eq!(
+            output.matches("sideEffect()").count(),
+            source.matches("sideEffect()").count(),
+            "{output}"
+        );
+        if source.starts_with("const exports") || source.starts_with("const module") {
+            assert!(
+                !output.contains("export const"),
+                "local objects are not CommonJS: {output}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unsupported_named_export_chains_keep_the_commonjs_boundary() {
+    for chain in [
+        "module.exports.a = module.exports = void 0;",
+        "module.exports = module.exports.default = function() { return marker; };",
+        "module.exports = exports.default = exports.a = makeValue();",
+        "exports.a = exports.__esModule = true;",
+        "exports.a = module.exports.a = makeValue();",
+        "exports[key()] = exports.b = void 0;",
+        "exports.a = exports.b = local = makeValue();",
+        "exports.a = local = makeValue();",
+        "const initial = exports.a = exports.b = makeValue();",
+        "if (flag) { exports.a = exports.b = makeValue(); }",
+        "class Holder { static { exports.a = exports.b = makeValue(); } }",
+    ] {
+        let source = format!("const dep = require('dep'); {chain} exports.ready = dep; function dynamic(code) {{ return eval(code); }}");
+        let once = common::render_rule(&source, |mark| {
+            wakaru_core::rules::UnEsm::new(mark, RewriteLevel::Standard)
+        });
+        assert_eq_normalized(&once, &source);
+        let twice = common::render_rule(&once, |mark| {
+            wakaru_core::rules::UnEsm::new(mark, RewriteLevel::Standard)
+        });
+        assert_eq_normalized(&twice, &once);
+    }
+}
+
+#[test]
+fn local_assignment_tails_keep_existing_export_recovery() {
+    for source in [
+        "var value; exports.item = value = makeValue();",
+        "var Item = build(); exports.Item = Item; exports.Item = Item = decorate(Item);",
+        "exports.Mode = void 0; var Mode; (function(Mode) { Mode[Mode.On = 1] = 'On'; })(Mode || (exports.Mode = Mode = {}));",
+    ] {
+        let output = common::render_pipeline(source);
+        assert!(output.contains("export "), "{output}");
+        assert!(!output.contains("exports."), "{output}");
+        assert!(validate_output_modules(&[("entry.js".into(), output.clone())]).is_empty(), "{output}");
+        assert_eq!(output.matches("makeValue()").count(), source.matches("makeValue()").count());
+        assert_eq!(output.matches("decorate(").count(), source.matches("decorate(").count());
+    }
+}
+
+#[test]
+fn whole_named_export_chains_are_recovered_in_one_pass() {
+    for (source, expected) in [
+        (
+            "exports.a = exports.b = function () { return 1; };",
+            "export var b = function () { return 1; }; export { b as a };",
+        ),
+        (
+            "exports.left = exports.right = () => 2;",
+            "export var right = () => 2; export { right as left };",
+        ),
+        (
+            "exports.a = module.exports.b = void 0; const a = 1; exports.a = a; const b = 2; module.exports.b = b;",
+            "export const a = 1; export const b = 2;",
+        ),
+        (
+            "module.exports = exports.default = function () { return 1; };",
+            "export default function () { return 1; };",
+        ),
+        (
+            "module.exports = exports.helper = function () { return 1; };",
+            "export var helper = function () { return 1; }; export default helper;",
+        ),
+        (
+            "module.exports = module.exports.flag = 1;",
+            "export const flag = 1; export default 1;",
+        ),
+        (
+            "var u; u = exports.paint = () => {}; use(u);",
+            "var u; export var paint = () => {}; u = paint; use(u);",
+        ),
+        (
+            "let u; u = exports.paint = 1; use(u);",
+            "let u; export const paint = 1; u = 1; use(u);",
+        ),
+        (
+            "const b = 1; exports.a = exports.b = () => b;",
+            "const b = 1; var a = () => b; export { a as b }; export { a };",
+        ),
+        (
+            "exports.foo = exports.default = function () {};",
+            "var foo = function () {}; export default foo; export { foo };",
+        ),
+        (
+            "exports.decode = exports.parse = require(\"qs-decode\"); exports.encode = exports.stringify = require(\"qs-encode\");",
+            "import parse from \"qs-decode\"; import stringify from \"qs-encode\"; export { parse }; export { parse as decode }; export { stringify }; export { stringify as encode };",
+        ),
+        (
+            // The mirror pair keeps the existing `export default require(...)` re-export shape.
+            "module.exports = exports.default = require(\"impl-lib\");",
+            "export default require(\"impl-lib\");",
+        ),
+    ] {
+        let once = common::render_rule(source, |mark| {
+            wakaru_core::rules::UnEsm::new(mark, RewriteLevel::Standard)
+        });
+        assert_eq_normalized(&once, expected);
+        let twice = common::render_rule(&once, |mark| {
+            wakaru_core::rules::UnEsm::new(mark, RewriteLevel::Standard)
+        });
+        assert_eq_normalized(&twice, &once);
+    }
+}
+
+#[test]
+fn named_export_chains_keep_the_boundary_under_dynamic_scope_or_effectful_values() {
+    for source in [
+        // The recovered exports become module bindings that direct eval or
+        // `with` could observe.
+        "exports.a = exports.b = () => {}; function dynamic(code) { return eval(code); }",
+        "exports.a = module.exports.b = 1; eval('a');",
+        "module.exports = exports.default = fn; function dynamic(code) { return eval(code); }",
+        "with (scope) { exports.a = exports.b = 1; }",
+        // Evaluating the value may run code that replaces a receiver. Only a
+        // literal-specifier CommonJS require is accepted among calls.
+        "exports.a = exports.b = makeValue();",
+        "exports.a = exports.b = require(name);",
+        "exports.a = exports.b = require(\"x\", extra);",
+        "exports.a = exports.b = require(...specs);",
+        "const require = load; exports.a = exports.b = require(\"x\");",
+        "exports.a = exports.b = new Thing();",
+        "exports.a = exports.b = void sideEffect();",
+        "module.exports.a = module.exports.b = (module.exports = {}, 1);",
+        "exports.a = exports.b = (exports = {}, 1);",
+        "module.exports = exports.default = (exports = {}, fn);",
+        "exports.a = exports.b = class { static { module.exports = {}; } };",
+        // `module.exports === module` makes the exports key replace the slot.
+        "module.exports.a = module.exports.exports = void 0;",
+        "exports.a = exports.exports = 1;",
+    ] {
+        let once = common::render_rule(source, |mark| {
+            wakaru_core::rules::UnEsm::new(mark, RewriteLevel::Standard)
+        });
+        assert_eq_normalized(&once, source);
+    }
+}
+
+#[test]
+fn whole_named_export_chains_validate_through_the_pipeline() {
+    for source in [
+        "exports.a = exports.b = function () { return 1; };",
+        "module.exports = exports.default = function () { return 1; };",
+        "var u; if (flag) { u = () => 1; } u = exports.paint = () => {}; exports.now = () => 1;",
+        "exports.a = module.exports.b = void 0; const a = () => 1; exports.a = a; var b = () => 2; module.exports.b = b;",
+        "exports.decode = exports.parse = require(\"qs-decode\"); exports.encode = exports.stringify = require(\"qs-encode\");",
+    ] {
+        let output = common::render_pipeline(source);
+        assert!(!output.contains("exports."), "{output}");
+        assert!(output.contains("export "), "{output}");
+        assert!(
+            validate_output_modules(&[("entry.js".into(), output.clone())]).is_empty(),
+            "{output}"
+        );
+    }
 }

@@ -163,6 +163,18 @@ impl VisitMut for UnEsm {
         if self.level < RewriteLevel::Standard {
             return;
         }
+        // UnAssignmentMerging owns safe chain splitting. UnEsm recovers the
+        // remaining top-level named-export chains as whole operations. If a
+        // chain still remains, keep the CommonJS boundary before any
+        // import/export rewrites; converting only its outer write leaves an
+        // orphaned RHS.
+        let original_body = normalize_named_export_chains(module, self.unresolved_mark);
+        if has_unhandled_named_export_chain(module, self.unresolved_mark) {
+            if let Some(original_body) = original_body {
+                module.body = original_body;
+            }
+            return;
+        }
         let current_filename = self.current_filename.clone();
         let has_local_self_require =
             contains_local_self_require(module, self.unresolved_mark, current_filename.as_deref());
@@ -5685,6 +5697,335 @@ fn collect_mutable_module_var_bindings(module: &Module) -> HashSet<BindingId> {
         })
         .flat_map(|var| var.decls.iter().flat_map(|decl| find_pat_ids(&decl.name)))
         .collect()
+}
+
+/// Recognize a remaining named-export assignment chain as one operation,
+/// including chains inside initializers or control flow. Known coupled default
+/// forms and a single static export followed only by resolved local writes
+/// retain their existing recovery (including enum and decorator assignments).
+/// Deferred function bodies are outside this top-level classification.
+fn has_unhandled_named_export_chain(module: &Module, unresolved_mark: Mark) -> bool {
+    struct Finder {
+        unresolved_mark: Mark,
+        found: bool,
+    }
+
+    impl Visit for Finder {
+        fn visit_assign_expr(&mut self, assign: &AssignExpr) {
+            if self.found {
+                return;
+            }
+            let mut current = assign;
+            let mut count = 0;
+            let mut named_export = false;
+            let mut local_tail = assign.op == AssignOp::Assign
+                && matches!(&assign.left,
+                    AssignTarget::Simple(SimpleAssignTarget::Member(member))
+                    if is_cjs_export_object_expr(&member.obj, self.unresolved_mark)
+                        && is_ident_prop(&member.prop).is_some());
+            loop {
+                count += 1;
+                if count > 1 {
+                    local_tail &= current.op == AssignOp::Assign
+                        && matches!(&current.left,
+                            AssignTarget::Simple(SimpleAssignTarget::Ident(binding))
+                            if binding.id.ctxt.outer() != self.unresolved_mark);
+                }
+                if let AssignTarget::Simple(SimpleAssignTarget::Member(member)) = &current.left {
+                    named_export |= is_cjs_export_object_expr(&member.obj, self.unresolved_mark);
+                }
+                let Expr::Assign(next) = strip_parens(&current.right) else {
+                    break;
+                };
+                current = next;
+            }
+            if count > 1 && named_export && !local_tail {
+                self.found = true;
+                return;
+            }
+            assign.visit_children_with(self);
+        }
+
+        fn visit_function(&mut self, _: &Function) {}
+        fn visit_arrow_expr(&mut self, _: &ArrowExpr) {}
+    }
+
+    let mut finder = Finder {
+        unresolved_mark,
+        found: false,
+    };
+    module.visit_with(&mut finder);
+    finder.found
+}
+
+/// Recover a remaining top-level named-export assignment chain as one
+/// operation before classification. UnAssignmentMerging already splits chains
+/// whose value can be evaluated once per target; the chains that reach here
+/// carry a function value or a receiver mix it does not split, and
+/// classifying only the outer write would strand the RHS as a CommonJS
+/// residual inside ESM output.
+///
+/// Every target must be a static named-export member on `exports` or
+/// `module.exports`, excluding the `exports` key (with `module.exports ===
+/// module`, that store replaces the slot). The outermost target may instead be
+/// the `module.exports` slot or a resolved local binding. A repeatable value
+/// (identifier, primitive literal, `void <number>`) is stored per target,
+/// matching the UnAssignmentMerging split. A function or arrow expression, or
+/// a `require("literal")` call, is evaluated once into a fresh `var` named
+/// after the innermost free export name; every target then stores that
+/// binding, so the recovered exports stay snapshots even when a local head is
+/// reassigned later. Creating a function runs no code, so moving the receiver
+/// evaluations past it is invisible without any module-wide analysis. The
+/// require form accepts the provider-ordering deviation the single
+/// `exports.name = require(...)` recovery already takes. Any other effectful
+/// value (another call, `new`, a sequence, a class with computed keys or
+/// static blocks) stays whole.
+/// `module.exports = exports.default = value` becomes the two-statement mirror
+/// that default-export recovery already removes; the `module.exports.default`
+/// read has no mirror recognizer and stays whole.
+///
+/// The recovered exports become module bindings, so the whole normalization
+/// skips a module with direct eval or `with` (dynamic-scope policy in
+/// docs/rewrite-assumptions.md). Chains in nested statements or initializers,
+/// or with other targets, are left for `has_unhandled_named_export_chain`.
+/// Returns the original body when anything changed so the caller can restore
+/// it if the module stays at the CommonJS boundary.
+fn normalize_named_export_chains(
+    module: &mut Module,
+    unresolved_mark: Mark,
+) -> Option<Vec<ModuleItem>> {
+    enum Head {
+        None,
+        ModuleExports,
+        Local(AssignTarget),
+    }
+
+    struct Chain {
+        span: Span,
+        head: Head,
+        /// Named-export targets, outermost first.
+        exports: Vec<(Span, AssignTarget, Atom)>,
+        value: Box<Expr>,
+    }
+
+    fn parse(item: &ModuleItem, unresolved_mark: Mark) -> Option<Chain> {
+        let ModuleItem::Stmt(Stmt::Expr(statement)) = item else {
+            return None;
+        };
+        let mut expr = strip_parens(&statement.expr);
+        let mut head = Head::None;
+        let mut exports = Vec::new();
+        let mut depth = 0usize;
+        while let Expr::Assign(assign) = expr {
+            if assign.op != AssignOp::Assign {
+                return None;
+            }
+            match &assign.left {
+                AssignTarget::Simple(SimpleAssignTarget::Member(member)) => {
+                    if is_module_exports_member(member, unresolved_mark) {
+                        if depth != 0 {
+                            return None;
+                        }
+                        head = Head::ModuleExports;
+                    } else if is_cjs_export_object_expr(&member.obj, unresolved_mark) {
+                        let name = is_ident_prop(&member.prop)?;
+                        if matches!(name.as_ref(), "__esModule" | "exports")
+                            || is_prototype_mutating_member_name(name.as_ref())
+                        {
+                            return None;
+                        }
+                        // A repeated name would classify as two writes of one
+                        // export and leave the dropped write as a residual.
+                        if exports.iter().any(|(_, _, seen)| *seen == name) {
+                            return None;
+                        }
+                        exports.push((assign.span, assign.left.clone(), name));
+                    } else {
+                        return None;
+                    }
+                }
+                AssignTarget::Simple(SimpleAssignTarget::Ident(binding)) => {
+                    if depth != 0 || binding.id.ctxt.outer() == unresolved_mark {
+                        return None;
+                    }
+                    head = Head::Local(assign.left.clone());
+                }
+                _ => return None,
+            }
+            depth += 1;
+            expr = strip_parens(&assign.right);
+        }
+        if depth < 2 || exports.is_empty() {
+            return None;
+        }
+        Some(Chain {
+            span: statement.span,
+            head,
+            exports,
+            value: Box::new(expr.clone()),
+        })
+    }
+
+    fn is_repeatable_value(expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident(_) => true,
+            Expr::Lit(lit) => !matches!(lit, Lit::Regex(_)),
+            Expr::Unary(unary) if unary.op == UnaryOp::Void => {
+                matches!(strip_parens(&unary.arg), Expr::Lit(Lit::Num(_)))
+            }
+            _ => false,
+        }
+    }
+
+    /// Values that may be evaluated once into a binding. Creating a function
+    /// runs no code. A `require("literal")` runs the provider, which the
+    /// existing `exports.name = require(...)` recovery already moves ahead of
+    /// the module body (`import_hoisting_eagerness`); the recovered binding
+    /// then goes through the same require-to-import path.
+    fn is_stored_value(expr: &Expr, unresolved_mark: Mark) -> bool {
+        match expr {
+            Expr::Fn(_) | Expr::Arrow(_) => true,
+            Expr::Call(call) => is_require_call(call, unresolved_mark).is_some(),
+            _ => false,
+        }
+    }
+
+    fn assign_item(
+        span: Span,
+        assign_span: Span,
+        left: AssignTarget,
+        right: Box<Expr>,
+    ) -> ModuleItem {
+        ModuleItem::Stmt(Stmt::Expr(ExprStmt {
+            span,
+            expr: Box::new(Expr::Assign(AssignExpr {
+                span: assign_span,
+                op: AssignOp::Assign,
+                left,
+                right,
+            })),
+        }))
+    }
+
+    let parsed: Vec<Option<Chain>> = module
+        .body
+        .iter()
+        .map(|item| parse(item, unresolved_mark))
+        .collect();
+    if parsed.iter().all(Option::is_none) {
+        return None;
+    }
+    let mut direct_eval = DirectEvalPresence::default();
+    module.visit_with(&mut direct_eval);
+    if direct_eval.found || super::eval_utils::module_has_with_stmt(module) {
+        return None;
+    }
+
+    let original_body = module.body.clone();
+    let mut used_names = collect_all_identifier_names(module);
+    let mut changed = false;
+    let mut body = Vec::with_capacity(module.body.len());
+    for (item, chain) in std::mem::take(&mut module.body).into_iter().zip(parsed) {
+        let Some(chain) = chain else {
+            body.push(item);
+            continue;
+        };
+        let repeatable = is_repeatable_value(&chain.value);
+        if !repeatable && !is_stored_value(&chain.value, unresolved_mark) {
+            body.push(item);
+            continue;
+        }
+
+        if matches!(chain.head, Head::ModuleExports)
+            && chain.exports.iter().any(|(_, _, name)| name == "default")
+        {
+            // `module.exports = exports.default = value`: emit the mirror pair.
+            let [(assign_span, target, _)] = chain.exports.as_slice() else {
+                body.push(item);
+                continue;
+            };
+            let AssignTarget::Simple(SimpleAssignTarget::Member(member)) = target else {
+                body.push(item);
+                continue;
+            };
+            if !matches!(strip_parens(&member.obj), Expr::Ident(_)) {
+                body.push(item);
+                continue;
+            }
+            body.push(assign_item(
+                chain.span,
+                *assign_span,
+                target.clone(),
+                chain.value.clone(),
+            ));
+            body.push(make_module_exports_assign_expr_item(
+                chain.span,
+                Box::new(Expr::Member(member.clone())),
+                unresolved_mark,
+            ));
+            changed = true;
+            continue;
+        }
+
+        let stored: Box<Expr> = if repeatable {
+            chain.value.clone()
+        } else {
+            let innermost = &chain.exports.last().expect("chain has exports").2;
+            let name = chain
+                .exports
+                .iter()
+                .rev()
+                .map(|(_, _, name)| name)
+                .find(|name| {
+                    name.as_ref() != "default"
+                        && is_valid_identifier_name(name)
+                        && !is_reserved_binding_name(name)
+                        && !used_names.contains(*name)
+                })
+                .cloned()
+                .unwrap_or_else(|| fresh_prefixed_name(innermost, &mut used_names));
+            used_names.insert(name.clone());
+            let binding = fresh_binding_ident(name, DUMMY_SP);
+            body.push(ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(VarDecl {
+                span: chain.span,
+                ctxt: Default::default(),
+                kind: VarDeclKind::Var,
+                declare: false,
+                decls: vec![VarDeclarator {
+                    span: chain.span,
+                    name: Pat::Ident(BindingIdent {
+                        id: binding.clone(),
+                        type_ann: None,
+                    }),
+                    init: Some(chain.value.clone()),
+                    definite: false,
+                }],
+            })))));
+            Box::new(Expr::Ident(binding))
+        };
+
+        // Assignment chains write from the inside out.
+        for (assign_span, target, _) in chain.exports.iter().rev() {
+            body.push(assign_item(
+                chain.span,
+                *assign_span,
+                target.clone(),
+                stored.clone(),
+            ));
+        }
+        match chain.head {
+            Head::None => {}
+            Head::ModuleExports => body.push(make_module_exports_assign_expr_item(
+                chain.span,
+                stored,
+                unresolved_mark,
+            )),
+            Head::Local(target) => body.push(assign_item(chain.span, chain.span, target, stored)),
+        }
+        changed = true;
+    }
+    module.body = body;
+    changed.then_some(original_body)
 }
 
 /// Split compound export initializers so the normal export classification can

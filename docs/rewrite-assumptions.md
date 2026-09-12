@@ -452,7 +452,10 @@ not a claim that `minimal` preserves every lowered class.
 
 Properties that compiler-emitted code writes on the module's own `exports` /
 `module.exports` object are ordinary data properties. No accessor installed on
-that object runs when such a write is reordered or repeated.
+that object runs when such a write is reordered or repeated. The wrapper's
+`module.exports` slot is also an ordinary data property, and the export
+receiver is not a Proxy. Reading that slot therefore neither runs code nor
+returns a different object unless a write replaces it.
 
 CommonJS does not guarantee this. A module may install a setter on its own
 export object:
@@ -473,10 +476,17 @@ observation, not a guarantee. The hazard is accepted rather than proven; the
 CommonJS wrapper only guarantees that `module`, `exports`, and `require` are
 defined.
 
-Affects: `UnAssignmentMerging` (splitting `exports.a = exports.b = value` with
-an identifier value; a literal value cannot change and needs no assumption),
-`UnEsm` (every `exports.x = v` to `export` recovery replaces a property write
-with a binding, so an accessor on `exports` is already ignored).
+Affects: `UnAssignmentMerging` (repeated identifier values and stable
+CommonJS receivers, including chains made entirely of static
+`module.exports.name` stores), and `UnEsm` (every `exports.x = v` to `export`
+recovery replaces a property write with a binding, so an accessor on `exports`
+is already ignored; its whole-chain recovery also evaluates a chained
+function value once into a binding and moves each target's reference
+evaluation past it, which creating a function cannot observe). A primitive literal or `void <number>` needs no
+assumption about the repeated value, but receiver stability is a separate
+condition. Nested receiver chains that also replace `module.exports`, mix
+roots, mutate prototypes, or write the `exports` key stay intact; splitting
+them would require a stronger proof or a receiver capture.
 
 Level: all levels. UnEsm's recovery is itself unconditional on this point.
 
@@ -501,7 +511,11 @@ hazard every `require`-to-`import` conversion in this codebase already
 accepts.
 
 Affects: `UnEsm` require conversion, `commonjs_default_object_composition`,
-and every fact-consuming recovery that imports a proven provider. The esbuild
+and every fact-consuming recovery that imports a proven provider. UnEsm's
+whole-chain recovery of `exports.a = exports.b = require("x")` evaluates the
+provider once into a binding before the export writes and then converts it
+the same way; it accepts this ordering deviation and does not prove that the
+provider leaves the consumer's `module.exports` slot untouched. The esbuild
 unpacker's ownership relocation (moving a top-level state writer into the
 module that owns the state declaration) shifts that statement's evaluation to
 the owner's import time — the same provider-versus-consumer interleaving

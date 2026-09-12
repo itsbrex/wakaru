@@ -332,7 +332,7 @@ export { relay as logger };
 fn commonjs_named_export_recovery_does_not_capture_global() {
     let source = r#"
 var marker = typeof runtime !== "undefined" && runtime.pid ? runtime.pid : "";
-module.exports = module.exports.default = function() {
+module.exports = function() {
     return marker;
 };
 module.exports.runtime = function() {
@@ -348,6 +348,11 @@ module.exports.runtime = function() {
         },
     )
     .expect("decompile should succeed");
+    assert!(
+        output.code.contains("export { _runtime as runtime }"),
+        "{}",
+        output.code
+    );
     let tdz_warnings: Vec<_> = output
         .warnings
         .iter()

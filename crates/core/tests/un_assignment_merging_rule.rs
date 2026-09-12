@@ -183,11 +183,14 @@ module.exports = fn;
 }
 
 #[test]
-fn keeps_module_exports_property_chain_with_intermediate_member_read() {
+fn splits_stable_module_exports_property_chain() {
     let input = r#"
 module.exports.foo = module.exports.bar = 1;
 "#;
-    assert_eq_normalized(&apply(input), input);
+    assert_eq_normalized(
+        &apply(input),
+        "module.exports.bar = 1; module.exports.foo = 1;",
+    );
 }
 
 #[test]
@@ -364,4 +367,62 @@ module["exports"]["flag"] = module.exports = 1;
 console.log(saved.flag);
 "#;
     assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn splits_pure_void_without_requiring_remove_void() {
+    for root in ["exports", "module.exports"] {
+        for value in ["void 0", "void (42)"] {
+            for context in [
+                "",
+                "function dynamic(code) { return eval(code); }",
+                "function f(undefined) { return undefined; }",
+            ] {
+                let input = format!("{root}.a = {root}.b = {value}; {context}");
+                let printed_value = value.replace("(42)", "42");
+                let expected =
+                    format!("{root}.b = {printed_value}; {root}.a = {printed_value}; {context}");
+                assert_eq_normalized(&apply(&input), &expected);
+            }
+        }
+    }
+    assert_eq_normalized(
+        &apply("let a, b; a = b = void 0;"),
+        "let a, b; b = void 0; a = void 0;",
+    );
+}
+
+#[test]
+fn nested_export_chain_supports_static_default_and_bracket_keys() {
+    assert_eq_normalized(
+        &apply("module.exports.default = module.exports[\"value\"] = void 0;"),
+        "module.exports[\"value\"] = void 0; module.exports.default = void 0;",
+    );
+    assert_eq_normalized(
+        &apply("module.exports[0] = module.exports[1] = void 0;"),
+        "module.exports[1] = void 0; module.exports[0] = void 0;",
+    );
+    assert_eq_normalized(
+        &apply("module.exports.a = module.exports[\"exports\"] = void 0;"),
+        "module.exports.a = module.exports[\"exports\"] = void 0;",
+    );
+}
+
+#[test]
+fn keeps_chains_that_need_receiver_or_value_captures() {
+    for input in [
+        "let obj; obj.a = obj = void 0;",
+        "module.exports.a = module.exports = void 0;",
+        "module.exports = module.exports.a = void 0;",
+        "module.exports.a = module.exports.exports = void 0;",
+        "module.exports.a = module.exports.__proto__ = void 0;",
+        "exports.a = module.exports.b = void 0;",
+        "module.exports[key()] = module.exports.b = void 0;",
+        "getObject().a = getObject().b = void 0;",
+        "exports.a = exports.b = void sideEffect();",
+        "module.exports.a = module.exports.b = makeValue();",
+        "const module = { exports: {} }; module.exports.a = module.exports.b = void 0;",
+    ] {
+        assert_eq_normalized(&apply(input), input);
+    }
 }

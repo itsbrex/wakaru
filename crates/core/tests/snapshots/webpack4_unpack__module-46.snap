@@ -2,6 +2,7 @@
 source: crates/core/tests/webpack4_unpack.rs
 expression: code
 ---
+"use strict";
 let r;
 let o;
 let i;
@@ -266,25 +267,25 @@ function q(e) {
             return 5000;
     }
 }
-export const unstable_requestPaint = u;
-export const unstable_IdlePriority = 5;
-export const unstable_ImmediatePriority = 1;
-export const unstable_LowPriority = 4;
-export const unstable_NormalPriority = 3;
-export const unstable_Profiling = null;
-export const unstable_UserBlockingPriority = 2;
-export const unstable_cancelCallback = (e)=>{
+const U = u;
+exports.unstable_IdlePriority = 5;
+exports.unstable_ImmediatePriority = 1;
+exports.unstable_LowPriority = 4;
+exports.unstable_NormalPriority = 3;
+exports.unstable_Profiling = null;
+exports.unstable_UserBlockingPriority = 2;
+exports.unstable_cancelCallback = (e)=>{
     e.callback = null;
 };
-export const unstable_continueExecution = ()=>{
+exports.unstable_continueExecution = ()=>{
     if (!(L || A)) {
         L = true;
         r(z);
     }
 };
-export const unstable_getCurrentPriorityLevel = ()=>M;
-export const unstable_getFirstCallbackNode = ()=>O(_);
-export const unstable_next = (e)=>{
+exports.unstable_getCurrentPriorityLevel = ()=>M;
+exports.unstable_getFirstCallbackNode = ()=>O(_);
+exports.unstable_next = (e)=>{
     switch(M){
         case 1:
         case 2:
@@ -302,8 +303,9 @@ export const unstable_next = (e)=>{
         M = n;
     }
 };
-export const unstable_pauseExecution = ()=>{};
-export const unstable_runWithPriority = (e, t)=>{
+exports.unstable_pauseExecution = ()=>{};
+exports.unstable_requestPaint = U;
+exports.unstable_runWithPriority = (e, t)=>{
     switch(e){
         case 1:
         case 2:
@@ -322,7 +324,7 @@ export const unstable_runWithPriority = (e, t)=>{
         M = n;
     }
 };
-export const unstable_scheduleCallback = (e, callback, a)=>{
+exports.unstable_scheduleCallback = (e, callback, a)=>{
     const u = exports.unstable_now();
     if (typeof a === "object" && a !== null) {
         var l = a.delay;
@@ -361,13 +363,13 @@ export const unstable_scheduleCallback = (e, callback, a)=>{
     }
     return e;
 };
-export const unstable_shouldYield = ()=>{
+exports.unstable_shouldYield = ()=>{
     const e = exports.unstable_now();
     D(e);
     const n = O(_);
     return n !== N && N !== null && n !== null && n.callback !== null && n.startTime <= e && n.expirationTime < N.expirationTime || a();
 };
-export const unstable_wrapCallback = (e)=>{
+exports.unstable_wrapCallback = (e)=>{
     const t = M;
     return function() {
         const n = M;
