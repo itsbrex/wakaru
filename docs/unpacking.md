@@ -56,9 +56,10 @@ attempted in order — first match wins:
    references. Reachability propagates through guard dependencies and namespace
    exports until a fixed point: calling `start` which references `read` exposes
    `read`'s dependencies too. Recursive groups with no early or unknown root
-   remain deferred. Unclassified references, including adopted support bodies
-   without a profile, count as unknown timing. Alternatively, the owner may
-   be a hoisted function whose transitive references stay within such functions
+   remain deferred. Unclassified references, including adopted support shapes
+   other than hoisted function declarations, count as unknown timing.
+   Alternatively, the owner may be a hoisted function whose transitive
+   references stay within such functions
    and external imports. A reference whose timing
    cannot be proven (a callback flowing into an eager expression, an
    object-literal method or getter at top level, a computed key, an
@@ -68,6 +69,22 @@ attempted in order — first match wins:
    attempted. The guard analysis does not infer callback scheduling: an eagerly
    reached function containing a Promise callback can therefore retain an
    unlinked reference even though that callback runs later at runtime.
+   Mutable state and hoisted support functions that write it share one
+   synthetic owner. Standalone CommonJS factories participate in that grouping
+   alongside lazy ESM initializers; each retains its own callable wrapper and
+   cache/initialization guard. An unconsumed hoisted entry function can also
+   move into a scope module when every binding it writes belongs to that module
+   and its other dependencies are itself, that module's bindings, or existing
+   imports. A writer reached only from entry may also retain read-only entry
+   dependencies through imports: adopted hoisted functions receive the same
+   deferred-body profile as ordinary declarations, so the existing timing guard
+   checks these edges per consumer. An unsafe sibling does not suppress a safe
+   consumer's import or gain permission to import the same binding. Entry
+   initializers stay in place. Writers reached from
+   extracted modules with entry-owned dependencies, or writers spanning owners,
+   are not adopted by this path; property mutations and shadowed locals do not
+   count as writes to the exported binding. Functions whose own binding is
+   reassigned stay in entry, avoiding a new imported-function write.
 8. **Metro** — React Native/Expo plain-JavaScript bundles made of top-level
    `__d(factory, moduleId, dependencyMap)` definitions and `__r(entryId)`
    startup calls. The extractor resolves indexed dependencies, normalizes the

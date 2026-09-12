@@ -561,7 +561,8 @@ fn detect_from_prepared_factories(
     // state initialized by another lazy factory. Those factories cannot be
     // separate ESM modules: the adopted function would assign to a read-only
     // import. Build connected components from declaration-level write edges
-    // and give every component one canonical output owner.
+    // and give every component one canonical output owner. CommonJS factories
+    // participate too: emission retains each factory's callable/cache boundary.
     let standalone_original_filenames: Vec<String> = standalone_factories
         .iter()
         .map(|factory| factory.filename.clone())
@@ -575,9 +576,6 @@ fn detect_from_prepared_factories(
         vec![HashSet::default(); standalone_factories.len()];
     let mut writer_factory_indices = HashSet::default();
     for (writer_index, factory) in standalone_factories.iter().enumerate() {
-        if factory.cjs_params.is_some() {
-            continue;
-        }
         for owned_binding in factory_owned_bindings
             .get(&factory.filename)
             .into_iter()
@@ -595,9 +593,6 @@ fn detect_from_prepared_factories(
                 else {
                     continue;
                 };
-                if standalone_factories[owner_index].cjs_params.is_some() {
-                    continue;
-                }
                 writer_factory_indices.insert(writer_index);
                 if owner_index != writer_index {
                     writer_adjacency[writer_index].insert(owner_index);
@@ -2854,6 +2849,8 @@ struct ScopeImportExportMaps {
     /// Each needs an `import ... from "./entry.js"` in the consumer and an
     /// `export` from the entry.
     scope_needed_entry_bindings: HashSet<BindingId>,
+    /// Entry reads proven safe for each consumer, independently of siblings.
+    scope_entry_imports: Vec<HashSet<BindingId>>,
     effective_exports: Vec<HashSet<Atom>>,
     binding_to_filename: HashMap<BindingId, String>,
     scope_claimed_factory_bindings: HashMap<BindingId, String>,
@@ -3222,6 +3219,71 @@ fn adopt_scope_support_decls(
     let factory_importable_bindings = refs.factory_importable_bindings;
     let drop_unowned_helper_sibling_indices = refs.drop_unowned_helper_sibling_indices;
 
+    // A hoisted entry function can write extracted state without being called
+    // by that state's module. Adopt it by its writes, not only by references
+    // from the owner. Moving a function declaration has no eager initializer;
+    // require all state writes to have one owner. Entry-only callers can keep
+    // read-only entry dependencies through deferred imports; functions reached
+    // from extracted modules must already have every dependency in their owner.
+    // Exporting a function that is itself reassigned would merely move the
+    // import-write error from its state binding to its own callable binding.
+    let reassigned_bindings: HashSet<BindingId> = analysis_items
+        .iter()
+        .flat_map(|item| exact_write_bindings_for_item(item, &metadata.top_level_bindings))
+        .collect();
+    let scope_referenced: HashSet<&BindingId> = metas
+        .iter()
+        .flat_map(|meta| {
+            meta.referenced_bindings
+                .iter()
+                .chain(&meta.exported_bindings)
+        })
+        .collect();
+    let mut entry_writers: HashMap<usize, HashSet<BindingId>> = HashMap::default();
+    for (index, item) in analysis_items.iter().enumerate() {
+        let ModuleItem::Stmt(Stmt::Decl(Decl::Fn(function))) = item else {
+            continue;
+        };
+        let binding = function.ident.to_id();
+        if consumed.contains(&index)
+            || reassigned_bindings.contains(&binding)
+            || binding_to_module.contains_key(&binding)
+            || factory_preassigned_bindings.contains_key(&binding)
+            || factory_importable_bindings.contains_key(&binding)
+        {
+            continue;
+        }
+        let writes = exact_write_bindings_for_item(item, &metadata.top_level_bindings);
+        let Some(owner) = writes
+            .iter()
+            .next()
+            .and_then(|id| binding_to_module.get(id))
+            .copied()
+        else {
+            continue;
+        };
+        let entry_only =
+            !scope_referenced.contains(&binding) && !refs.factory_referenced.contains(&binding);
+        if !writes
+            .iter()
+            .all(|id| binding_to_module.get(id) == Some(&owner))
+            || !item_infos[index].references.iter().all(|id| {
+                id == &binding
+                    || binding_to_module.get(id) == Some(&owner)
+                    || external_imports.contains_key(id)
+                    || metas[owner].local_import_bindings.contains(id)
+                    || (entry_only
+                        && decl_index_by_binding.contains_key(id)
+                        && !binding_to_module.contains_key(id)
+                        && !factory_preassigned_bindings.contains_key(id)
+                        && !factory_importable_bindings.contains_key(id))
+            })
+        {
+            continue;
+        }
+        entry_writers.entry(owner).or_default().insert(binding);
+    }
+
     let mut owned_support_by_index: HashMap<usize, HashSet<BindingId>> = HashMap::default();
     for (mi, meta) in metas.iter_mut().enumerate() {
         let module_start = meta
@@ -3234,6 +3296,7 @@ fn adopt_scope_support_decls(
             .referenced_bindings
             .iter()
             .chain(meta.exported_bindings.iter())
+            .chain(entry_writers.get(&mi).into_iter().flatten())
             .cloned()
             .collect();
         while let Some(binding) = queue.pop() {
@@ -3251,7 +3314,10 @@ fn adopt_scope_support_decls(
                 continue;
             };
             if consumed.contains(&decl_index)
-                || decl_index >= module_start
+                || (decl_index >= module_start
+                    && !entry_writers
+                        .get(&mi)
+                        .is_some_and(|writers| writers.contains(&binding)))
                 || !is_scope_support_declaration_for_binding(&analysis_items[decl_index], &binding)
             {
                 continue;
@@ -3265,8 +3331,14 @@ fn adopt_scope_support_decls(
                 .or_default()
                 .insert(binding.clone());
 
+            // An entry writer's read dependencies keep their existing owners.
+            // Recursively adopting them could move a mutable entry function and
+            // leave its reassignment targeting a new import in entry.js.
+            let is_entry_writer = entry_writers
+                .get(&mi)
+                .is_some_and(|writers| writers.contains(&binding));
             for ref_binding in &item_infos[decl_index].references {
-                if meta.referenced_bindings.insert(ref_binding.clone()) {
+                if meta.referenced_bindings.insert(ref_binding.clone()) && !is_entry_writer {
                     queue.push(ref_binding.clone());
                 }
             }
@@ -3463,13 +3535,24 @@ fn scope_evaluation_profile(
     meta: &ScopeModuleMeta,
     analysis_items: &[ModuleItem],
     item_infos: &[ItemBindingInfo],
+    decl_index_by_binding: &HashMap<BindingId, usize>,
 ) -> ScopeEvaluationProfile {
     let mut profile = ScopeEvaluationProfile {
         eager: HashSet::default(),
         guards: HashMap::default(),
         unprovable: HashSet::default(),
     };
-    for &i in &meta.body_indices {
+    // Adopted hoisted functions have the same deferred-body guard as ordinary
+    // body declarations. Other adopted support shapes remain unclassified.
+    let adopted_functions = meta.owned_support_bindings.iter().filter_map(|binding| {
+        let i = *decl_index_by_binding.get(binding)?;
+        matches!(
+            &analysis_items[i],
+            ModuleItem::Stmt(Stmt::Decl(Decl::Fn(_)))
+        )
+        .then_some(i)
+    });
+    for i in meta.body_indices.iter().copied().chain(adopted_functions) {
         let item = &analysis_items[i];
         let mut eager = EagerRefCollector {
             references: HashSet::default(),
@@ -3826,12 +3909,19 @@ fn compute_scope_imports_exports(
         .collect();
     let profiles: Vec<ScopeEvaluationProfile> = metas
         .iter()
-        .map(|meta| scope_evaluation_profile(meta, analysis_items, item_infos))
+        .map(|meta| {
+            scope_evaluation_profile(
+                meta,
+                analysis_items,
+                item_infos,
+                &maps.decl_index_by_binding,
+            )
+        })
         .collect();
     let early_references = early_scope_references(metas, &profiles);
     let mut scope_needed_entry_bindings: HashSet<BindingId> = HashSet::default();
-    let mut unsafe_entry_bindings: HashSet<BindingId> = HashSet::default();
-    for (meta, profile) in metas.iter().zip(&profiles) {
+    let mut scope_entry_imports = vec![HashSet::default(); metas.len()];
+    for (mi, (meta, profile)) in metas.iter().zip(&profiles).enumerate() {
         let namespace_read_early = meta
             .namespaces
             .iter()
@@ -3867,13 +3957,9 @@ fn compute_scope_imports_exports(
             };
             if safe {
                 scope_needed_entry_bindings.insert(binding.clone());
-            } else {
-                unsafe_entry_bindings.insert(binding.clone());
+                scope_entry_imports[mi].insert(binding.clone());
             }
         }
-    }
-    for binding in &unsafe_entry_bindings {
-        scope_needed_entry_bindings.remove(binding);
     }
     for binding in &scope_needed_entry_bindings {
         binding_to_filename
@@ -3885,6 +3971,7 @@ fn compute_scope_imports_exports(
         remaining_indices,
         entry_referenced,
         scope_needed_entry_bindings,
+        scope_entry_imports,
         effective_exports,
         binding_to_filename,
         scope_claimed_factory_bindings,
@@ -3922,7 +4009,7 @@ fn emit_scope_modules(
         binding_filename_by_atom,
         filename_to_module,
         binding_module_by_atom,
-        scope_needed_entry_bindings,
+        scope_entry_imports,
         ..
     } = ie;
     let factory_preassigned_bindings = refs.factory_preassigned_bindings;
@@ -3976,7 +4063,7 @@ fn emit_scope_modules(
                         .or_default()
                         .push(ref_binding.clone());
                 }
-            } else if scope_needed_entry_bindings.contains(ref_binding) {
+            } else if scope_entry_imports[mi].contains(ref_binding) {
                 imports_by_filename
                     .entry("entry.js".to_string())
                     .or_default()
@@ -4078,7 +4165,7 @@ fn emit_scope_modules(
                         .or_default()
                         .push(export_binding.clone());
                 }
-            } else if scope_needed_entry_bindings.contains(export_binding) {
+            } else if scope_entry_imports[mi].contains(export_binding) {
                 imports_by_filename
                     .entry("entry.js".to_string())
                     .or_default()

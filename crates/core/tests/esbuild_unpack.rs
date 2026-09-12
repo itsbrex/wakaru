@@ -1676,6 +1676,255 @@ console.log(left, right);
     );
 }
 
+/// A CommonJS factory keeps its callable/cache boundary when its support
+/// writer shares state with a lazy ESM initializer.
+#[test]
+fn cjs_support_writer_shares_lazy_state_owner() {
+    let bundle = r#"
+var __esm = (fn, value) => () => (fn && (value = fn(fn = 0)), value);
+var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var ready;
+function enable() { ready = true; return ready; }
+var init_state = __esm(() => { record('state'); ready = false; });
+var require_lib = __commonJS((exports, module) => {
+  init_state(); record('lib');
+  module.exports = { enable, read: () => ready };
+});
+record('before');
+var one = require_lib(); var two = require_lib();
+record([one === two, one.read(), one.enable(), two.read()]);
+"#;
+    let pairs = expect_unpack_raw(bundle);
+    let owner = &pairs
+        .iter()
+        .find(|(_, code)| code.contains("function enable"))
+        .unwrap()
+        .1;
+    assert!(
+        owner.contains("export function init_state")
+            && owner.contains("export function require_lib"),
+        "state, writer, and both callable factories must share an owner: {pairs:#?}"
+    );
+    let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+    assert!(
+        !entry.contains("function enable") && !entry.contains("var ready"),
+        "entry must not retain a second copy of the mutable state: {entry}"
+    );
+    assert_eq!(validate_output_modules(&pairs), vec![]);
+    assert_eq!(
+        validate_output_modules(&expect_unpack(bundle, "bundle.js")),
+        vec![]
+    );
+}
+
+/// An entry-owned hoisted function may write state extracted into a namespace
+/// module even when that module never calls the writer itself.
+#[test]
+fn scope_state_adopts_entry_hoisted_writer() {
+    let bundle = r#"
+var __defProp = Object.defineProperty;
+var __export = (target, all) => { for (var name in all) __defProp(target, name, { get: all[name], enumerable: true }); };
+var ns = {}; __export(ns, { read: () => read });
+function read() { return ready; }
+var ready = false;
+function enable() { if (!ready) { ready = true; record('enabled'); } }
+record(read()); enable(); enable(); record(read());
+export { ns };
+"#;
+    let pairs = expect_unpack_raw(bundle);
+    let owner = &pairs
+        .iter()
+        .find(|(_, code)| code.contains("var ready"))
+        .unwrap()
+        .1;
+    assert!(
+        owner.contains("function enable"),
+        "state must own its hoisted writer: {pairs:#?}"
+    );
+    let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+    assert!(
+        !entry.contains("function enable"),
+        "entry must call the relocated writer: {entry}"
+    );
+    assert_eq!(validate_output_modules(&pairs), vec![]);
+    assert_eq!(
+        validate_output_modules(&expect_unpack(bundle, "bundle.js")),
+        vec![]
+    );
+}
+
+#[test]
+fn scope_writer_adoption_requires_local_dependencies_and_binding_writes() {
+    let prefix = r#"
+var __defProp = Object.defineProperty;
+var __export = (target, all) => { for (var name in all) __defProp(target, name, { get: all[name], enumerable: true }); };
+var ns = {}; __export(ns, { read: () => read });
+function read() { return state; }
+var state = {};
+"#;
+    for tail in [
+        "function write(state) { state = {}; } write({});",
+        "function write() { state.value = true; } write();",
+    ] {
+        let pairs = expect_unpack_raw(&format!("{prefix} {tail} export {{ ns }};"));
+        let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+        assert!(
+            entry.contains("function write"),
+            "shadowed/property writes must not nominate a writer: {pairs:#?}"
+        );
+    }
+}
+
+#[test]
+fn scope_entry_writer_reads_entry_class_after_initialization() {
+    let bundle = r#"
+var __defProp = Object.defineProperty;
+var __export = (target, all) => { for (var name in all) __defProp(target, name, { get: all[name], enumerable: true }); };
+var ns = {}; __export(ns, { read: () => read });
+function read() { return ready; }
+var ready = false;
+class Value { static read() { return true; } }
+function enable() { ready = Value.read(); }
+enable(); record(read());
+export { ns };
+"#;
+    let pairs = expect_unpack_raw(bundle);
+    let owner = &pairs
+        .iter()
+        .find(|(_, code)| code.contains("var ready"))
+        .unwrap()
+        .1;
+    assert!(
+        owner.contains("function enable") && owner.contains("from \"./entry.js\""),
+        "the deferred writer must import its entry dependency: {pairs:#?}"
+    );
+    let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+    assert!(
+        entry.contains("class Value") && !entry.contains("function enable"),
+        "entry retains the class initializer and calls the relocated function: {entry}"
+    );
+    assert_eq!(validate_output_modules(&pairs), vec![]);
+    assert_eq!(
+        validate_output_modules(&expect_unpack(bundle, "bundle.js")),
+        vec![]
+    );
+}
+
+#[test]
+fn scope_writer_with_reassigned_function_binding_stays_in_entry() {
+    let bundle = r#"
+var __defProp = Object.defineProperty;
+var __export = (target, all) => { for (var name in all) __defProp(target, name, { get: all[name], enumerable: true }); };
+var ns = {}; __export(ns, { read: () => read });
+function read() { return ready; }
+var ready = false;
+function enable() { ready = true; }
+enable = replacement;
+enable();
+export { ns };
+"#;
+    let pairs = expect_unpack_raw(bundle);
+    let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+    assert!(
+        entry.contains("function enable"),
+        "moving a reassigned function would create a new import write: {pairs:#?}"
+    );
+}
+
+#[test]
+fn deferred_writer_import_is_independent_of_an_unsafe_sibling_consumer() {
+    let bundle = r#"
+var __defProp = Object.defineProperty;
+var __export = (target, all) => { for (var name in all) __defProp(target, name, { get: all[name], enumerable: true }); };
+var early_ns = {}; __export(early_ns, { early: () => early });
+function early() { return Value.read(); }
+consume(early);
+var late_ns = {}; __export(late_ns, { read: () => read });
+function read() { return ready; }
+var ready = false;
+class Value { static read() { return true; } }
+function enable() { ready = Value.read(); }
+enable();
+export { early_ns, late_ns };
+"#;
+    for pairs in [
+        expect_unpack_raw(bundle),
+        expect_unpack(bundle, "bundle.js"),
+    ] {
+        let late = &pairs
+            .iter()
+            .find(|(_, code)| code.contains("function enable"))
+            .unwrap()
+            .1;
+        assert!(
+            late.contains("from \"./entry.js\""),
+            "safe consumer must get its import despite an unsafe sibling: {pairs:#?}"
+        );
+        let early = &pairs
+            .iter()
+            .find(|(_, code)| code.contains("function early"))
+            .unwrap()
+            .1;
+        assert!(
+            !early.contains("from \"./entry.js\""),
+            "unsafe consumer must not acquire an eager entry edge: {early}"
+        );
+    }
+}
+
+#[test]
+fn scope_entry_writer_does_not_adopt_a_reassigned_entry_dependency() {
+    let bundle = r#"
+var __defProp = Object.defineProperty;
+var __export = (target, all) => { for (var name in all) __defProp(target, name, { get: all[name], enumerable: true }); };
+function value() { return false; }
+var ns = {}; __export(ns, { read: () => read });
+function read() { return ready; }
+var ready = false;
+function enable() { ready = value(); }
+value = () => true;
+enable();
+export { ns };
+"#;
+    let pairs = expect_unpack_raw(bundle);
+    let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+    assert!(
+        entry.contains("function value") && !entry.contains("function enable"),
+        "writer dependencies must keep their entry ownership and writes: {pairs:#?}"
+    );
+    assert_eq!(validate_output_modules(&pairs), vec![]);
+    assert_eq!(
+        validate_output_modules(&expect_unpack(bundle, "bundle.js")),
+        vec![]
+    );
+}
+
+#[test]
+fn scope_entry_writer_keeps_external_import_dependency() {
+    let bundle = r#"
+import { notify } from "external";
+var __defProp = Object.defineProperty;
+var __export = (target, all) => { for (var name in all) __defProp(target, name, { get: all[name], enumerable: true }); };
+var ns = {}; __export(ns, { read: () => read });
+function read() { return ready; }
+var ready = false;
+function enable() { ready = true; notify(); }
+enable();
+export { ns };
+"#;
+    let pairs = expect_unpack_raw(bundle);
+    let owner = &pairs
+        .iter()
+        .find(|(_, code)| code.contains("var ready"))
+        .unwrap()
+        .1;
+    assert!(
+        owner.contains("function enable") && owner.contains("from \"external\""),
+        "relocated writer must retain its external dependency: {pairs:#?}"
+    );
+    assert_eq!(validate_output_modules(&pairs), vec![]);
+}
+
 /// A top-level initialization assignment is part of the mutable binding's
 /// ownership unit. If support writers make a standalone factory own the
 /// declaration, leaving the initializer in entry.js creates an assignment to
