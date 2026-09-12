@@ -120,6 +120,12 @@ identifiers that exactly one other module declares at module scope. With
 original bundle. It exits nonzero when it finds anything. Validate normal
 output only: raw output has no module-graph contract.
 
+Const/import-write findings are static: an unreachable or short-circuited
+assignment still produces a finding, and caught exceptions are not excluded.
+They do not prove a load failure or a Wakaru regression. `--input` compares
+free identifiers only; it does not suppress const/import writes already in
+the input.
+
 ## Overwrite protection
 
 Wakaru refuses to overwrite existing files or write into a non-empty output

@@ -276,6 +276,12 @@ module source goal even when they contain no import/export declaration
 themselves; explicit `.cjs` / `.cts` files retain the script/CommonJS source
 goal even when imported by ESM.
 
+Const/import-write findings use resolved binding identity, but do not analyze
+reachability, logical-assignment short circuits, or caught exceptions. They
+can therefore occur in code that loads and executes successfully. A finding
+also does not establish that Wakaru introduced the write: `--input` compares
+free identifiers only and does not suppress pre-existing const/import writes.
+
 Free identifiers are reported as `unresolved_reference` only when the graph
 proves them wrong. Without `--input`, that proof is structural: exactly one
 other emitted module declares the same name at module scope, which is the

@@ -65,12 +65,16 @@ edges.
 ## Validating Unpacked Output
 
 `debug validate` checks a directory of emitted modules as one graph and
-reports structural defects that would make it fail to load as ESM: dangling
-references, missing or ambiguous imported names, duplicate or conflicting
+reports structural findings that can indicate load-time or runtime failures:
+dangling references, missing or ambiguous imported names, duplicate or conflicting
 exports and declarations, leftover `module` / `exports` runtime uses, and
 writes to imported or `const` bindings. The full finding inventory and the
 source-goal rules live in [cli.md](cli.md). The command exits nonzero when
-findings exist, so harnesses can gate on it.
+findings exist, so harnesses can gate on it. Const/import-write findings are
+static: they do not prove that the assignment executes, that an error escapes
+a catch, or that Wakaru introduced the write. Compare the original binding
+and write when attributing a finding; `--input` only filters free-identifier
+findings, not const/import writes.
 
 ```bash
 cargo run -p wakaru-cli -- --unpack bundle.js -o out/
