@@ -99,14 +99,14 @@ wakaru extract input.js.map -o src/
 ## Vue SFC recovery (experimental)
 
 ```bash
-wakaru input.js --vue-sfc                 # print .vue when recovery succeeds
+wakaru input.js --vue-sfc -o output.js    # JavaScript plus a recovered input.vue
 wakaru input.js --vue-sfc -o App.vue      # Vue-only output; errors if recovery fails
 wakaru bundle.js --unpack --vue-sfc -o out/   # additive .vue sidecars per recovered module
 ```
 
 Best-effort Vue 3 render recovery. With a non-`.vue` output path, Wakaru
 writes normal JavaScript and adds a sibling `.vue` sidecar when recovery
-succeeds.
+succeeds. Without `-o`, stdout remains JavaScript.
 
 ## Output options
 

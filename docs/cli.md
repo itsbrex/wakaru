@@ -192,15 +192,15 @@ supported with `--unpack`.
 ## Vue SFC recovery
 
 ```bash
-wakaru input.js --vue-sfc
+wakaru input.js --vue-sfc -o output.js
 wakaru input.js --vue-sfc -o App.vue
 wakaru custom/target.min.mjs --vue-sfc -o out/renamed.mjs
 wakaru bundle.js --unpack --vue-sfc -o out/
 ```
 
 `--vue-sfc` is an experimental, best-effort Vue 3 render recovery path. In
-single-file mode without `-o`, Wakaru prints a recovered `.vue` artifact when
-recovery succeeds and normal decompiled JavaScript otherwise.
+single-file mode without `-o`, stdout remains decompiled JavaScript. Use an
+output path to write recovered Vue files.
 
 With `-o`, `.vue` paths are Vue-only: `-o App.vue` writes the recovered SFC and
 errors if recovery fails. Other output paths are JavaScript-primary: Wakaru

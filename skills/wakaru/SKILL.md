@@ -131,13 +131,14 @@ still writes JavaScript for every module, and recoverable Vue modules also get
 sibling `.vue` artifacts.
 
 ```bash
-wakaru input.js --vue-sfc
+wakaru input.js --vue-sfc -o output.js
 wakaru input.js --vue-sfc -o App.vue
 wakaru bundle.js --unpack --vue-sfc --json -o out/
 ```
 
-For batch analysis, prefer `--unpack --vue-sfc --json` and inspect the JSON
-output first. Each `modules` entry describes an output artifact. Its `kind` is
+For one file, use `-o` to write recovered Vue output; without it, stdout
+remains JavaScript. For batch analysis, prefer `--unpack --vue-sfc --json` and
+inspect the JSON output first. Each `modules` entry describes an output artifact. Its `kind` is
 `javascript` or `vue_sfc`; Vue-related `status` values are
 `recovered_vue_sfc`, `vue_sfc_source_js`, and `vue_sfc_fallback_js`. Open
 recovered `.vue` files for template inspection, but keep the paired JavaScript
