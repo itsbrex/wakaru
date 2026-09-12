@@ -86,7 +86,14 @@ attempted in order — first match wins:
    reports.
    Standalone CommonJS factories participate in that grouping
    alongside lazy ESM initializers; each retains its own callable wrapper and
-   cache/initialization guard. An unconsumed hoisted entry function can also
+   cache/initialization guard. A CommonJS factory that assigns top-level
+   state also preassigns that state like a lazy ESM initializer does: a scope
+   module that writes the same state claims the factory and emits it as an
+   exported cached callable, and any other module that calls the factory
+   imports it from its owner. Synthesized cache and guard names avoid the
+   names already declared in the module they land in and every identifier
+   the factory body mentions, since a body local or parameter would shadow
+   the helper inside the callable. An unconsumed hoisted entry function can also
    move into a scope module when every binding it writes belongs to that module
    and its other dependencies are itself, that module's bindings, or existing
    imports. A writer reached only from entry may also retain read-only entry

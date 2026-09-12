@@ -2096,18 +2096,46 @@ record(load()); reset(); record(ready);
 fn demoted_factory_helpers_avoid_entry_declarations() {
     let cjs = "var load = __commonJS((exports, module) => { ready = 1; module.exports = 1; });";
     let esm = "var load = __esm(() => { ready = 1; });";
-    for (factory, existing, helper) in [
-        (cjs, "var __wakaru_load_cache = 42;", "__wakaru_load_cache"),
-        (cjs, "let __wakaru_load_cache = 42;", "__wakaru_load_cache"),
+    let cjs_local = "var load = __commonJS((exports, module) => { var __wakaru_load_cache$2 = 7; ready = 1; module.exports = __wakaru_load_cache$2; });";
+    let esm_local = "var load = __esm(() => { var __wakaru_load_initialized$2 = 7; ready = __wakaru_load_initialized$2; });";
+    for (factory, existing, helper, fresh) in [
+        (
+            cjs,
+            "var __wakaru_load_cache = 42;",
+            "__wakaru_load_cache",
+            "$2",
+        ),
+        (
+            cjs,
+            "let __wakaru_load_cache = 42;",
+            "__wakaru_load_cache",
+            "$2",
+        ),
         (
             esm,
             "var __wakaru_load_initialized = 42;",
             "__wakaru_load_initialized",
+            "$2",
         ),
         (
             esm,
             "let __wakaru_load_initialized = 42;",
             "__wakaru_load_initialized",
+            "$2",
+        ),
+        // A factory-local binding occupying the next candidate would shadow
+        // the cache inside the callable and re-run the body on every call.
+        (
+            cjs_local,
+            "var __wakaru_load_cache = 42;",
+            "__wakaru_load_cache",
+            "$3",
+        ),
+        (
+            esm_local,
+            "var __wakaru_load_initialized = 42;",
+            "__wakaru_load_initialized",
+            "$3",
         ),
     ] {
         let bundle = format!(
@@ -2127,7 +2155,7 @@ load(); reset(); record([ready, {helper}]); record(require_dummy());
         assert!(
             entry.contains("function load()")
                 && entry.contains(&format!("{helper} = 42"))
-                && entry.contains(&format!("{helper}$2")),
+                && entry.contains(&format!("var {helper}{fresh}")),
             "the demoted helper must take a fresh name: {entry}"
         );
         assert_eq!(
@@ -2138,6 +2166,224 @@ load(); reset(); record([ready, {helper}]); record(require_dummy());
         assert_eq!(validate_output_modules(&pairs), vec![]);
         assert_eq!(
             validate_output_modules(&expect_unpack(&bundle, "bundle.js")),
+            vec![]
+        );
+    }
+}
+
+const SCOPE_HELPERS: &str = r#"
+var __esm = (fn, value) => () => (fn && (value = fn(fn = 0)), value);
+var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __defProp = Object.defineProperty;
+var __export = (target, all) => { for (var name in all) __defProp(target, name, { get: all[name], enumerable: true }); };
+"#;
+
+/// A CommonJS factory whose written state sits inside a scope module's
+/// region follows the lazy ESM initializer path: the factory keeps its
+/// cached callable next to the state it owns, and the module's call to it
+/// resolves either locally or through an import.
+#[test]
+fn scope_module_reaches_cjs_factory_writing_region_state() {
+    let bundle = format!(
+        r#"{SCOPE_HELPERS}
+var ns = {{}}; __export(ns, {{ get: () => get }});
+function get() {{ return load(); }}
+var ready = 0;
+var load = __commonJS((exports, module) => {{ ready = 1; module.exports = 1; }});
+record(ns.get()); record(ready);
+export {{ ns }};
+"#
+    );
+    for pairs in [
+        expect_unpack_raw(&bundle),
+        expect_unpack(&bundle, "bundle.js"),
+    ] {
+        let owners: Vec<&(String, String)> = pairs
+            .iter()
+            .filter(|(_, code)| code.contains("function load()"))
+            .collect();
+        assert_eq!(owners.len(), 1, "the factory is emitted once: {pairs:#?}");
+        let (owner_name, owner) = owners[0];
+        assert!(
+            owner.contains("__wakaru_load_cache")
+                && owner.contains("ready = 1")
+                && owner.contains("ready = 0"),
+            "the factory keeps its cached callable next to its state: {owner}"
+        );
+        let ns = &pairs.iter().find(|(name, _)| name == "ns.js").unwrap().1;
+        assert!(
+            owner_name == "ns.js" || ns.contains("import { load }"),
+            "the scope module must reach the factory it calls: {ns}"
+        );
+        assert_eq!(validate_output_modules(&pairs), vec![]);
+    }
+}
+
+/// A scope module that calls a standalone CommonJS factory imports it even
+/// when that factory assigns entry-owned state.
+#[test]
+fn scope_module_imports_cjs_factory_that_writes_entry_state() {
+    let bundle = format!(
+        r#"{SCOPE_HELPERS}
+var ready = 0;
+var ns = {{}}; __export(ns, {{ get: () => get }});
+function get() {{ return load(); }}
+var load = __commonJS((exports, module) => {{ ready = 1; module.exports = 1; }});
+record(ns.get()); record(ready);
+export {{ ns }};
+"#
+    );
+    for pairs in [
+        expect_unpack_raw(&bundle),
+        expect_unpack(&bundle, "bundle.js"),
+    ] {
+        let ns = &pairs.iter().find(|(name, _)| name == "ns.js").unwrap().1;
+        assert!(
+            ns.contains("import { load } from \"./load.js\""),
+            "the scope module must import the factory it calls: {ns}"
+        );
+        let load = &pairs.iter().find(|(name, _)| name == "load.js").unwrap().1;
+        assert!(
+            load.contains("export function load()") && load.contains("ready = 0"),
+            "the standalone factory owns the state it writes: {load}"
+        );
+        assert_eq!(validate_output_modules(&pairs), vec![]);
+    }
+}
+
+/// A scope module that writes a CommonJS factory's state claims the factory.
+/// The merged factory keeps its cached callable, is exported for entry
+/// callers, and still imports the sibling factory its body calls.
+#[test]
+fn merged_cjs_factory_imports_sibling_factory() {
+    let bundle = format!(
+        r#"{SCOPE_HELPERS}
+var ns = {{}}; __export(ns, {{ get: () => get }});
+function get() {{ value += 1; return value; }}
+var value = 0;
+var fill = __commonJS((exports, module) => {{ value = load(); module.exports = 1; }});
+var ready = 0;
+var load = __commonJS((exports, module) => {{ ready = 1; module.exports = 1; }});
+record(fill()); record(ns.get()); record(ready);
+export {{ ns }};
+"#
+    );
+    for pairs in [
+        expect_unpack_raw(&bundle),
+        expect_unpack(&bundle, "bundle.js"),
+    ] {
+        let ns = &pairs.iter().find(|(name, _)| name == "ns.js").unwrap().1;
+        assert!(
+            ns.contains("export function fill()")
+                && ns.contains("__wakaru_fill_cache")
+                && ns.contains("value = load()")
+                && ns.contains("import { load } from \"./load.js\""),
+            "the merged factory is emitted with its import: {ns}"
+        );
+        assert!(
+            pairs.iter().all(|(name, _)| name != "fill.js"),
+            "no standalone file remains for the merged factory: {pairs:#?}"
+        );
+        let entry = &pairs.iter().find(|(name, _)| name == "entry.js").unwrap().1;
+        assert!(
+            entry.contains("fill()"),
+            "entry keeps calling the merged factory: {entry}"
+        );
+        assert_eq!(validate_output_modules(&pairs), vec![]);
+    }
+}
+
+/// When a merged factory references a group that an unrelocatable entry
+/// writer would demote, the split cannot be cancelled. The writer's
+/// assignment to the imported state remains and output validation reports
+/// it; the state is never forked into a second silent copy.
+#[test]
+fn undemotable_writer_group_keeps_validator_visible_residual() {
+    let bundle = format!(
+        r#"{SCOPE_HELPERS}
+var ns = {{}}; __export(ns, {{ get: () => get }});
+function get() {{ value += 1; return value; }}
+var value = 0;
+var fill = __commonJS((exports, module) => {{ value = load(); module.exports = 1; }});
+var ready = 0;
+var load = __commonJS((exports, module) => {{ ready = 1; module.exports = 1; }});
+var reset = () => {{ ready = 2; }};
+record(fill()); record(ns.get()); reset(); record(ready);
+export {{ ns }};
+"#
+    );
+    for pairs in [
+        expect_unpack_raw(&bundle),
+        expect_unpack(&bundle, "bundle.js"),
+    ] {
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(_, code)| code.contains("ready = 0"))
+                .count(),
+            1,
+            "the state must not fork: {pairs:#?}"
+        );
+        let findings = validate_output_modules(&pairs);
+        assert!(
+            findings.len() == 1
+                && findings[0].filename == "entry.js"
+                && findings[0].kind == OutputFindingKind::AssignToImport,
+            "the residual is exactly the entry writer's import assignment: {findings:#?}"
+        );
+    }
+}
+
+/// Synthesized factory caches and guards avoid names declared in the module
+/// they are emitted into, for merged and standalone emission alike.
+#[test]
+fn factory_helpers_avoid_module_declarations() {
+    let merged = format!(
+        r#"{SCOPE_HELPERS}
+var ns = {{}}; __export(ns, {{ get: () => get }});
+function get() {{ ready = 5; return load() + __wakaru_load_cache; }}
+var __wakaru_load_cache = 40;
+var ready = 0;
+var load = __commonJS((exports, module) => {{ ready = 1; module.exports = 2; }});
+record(ns.get());
+export {{ ns }};
+"#
+    );
+    let standalone = format!(
+        r#"{SCOPE_HELPERS}
+var __wakaru_load_cache = 40;
+var __wakaru_init_initialized = 40;
+var load = __commonJS((exports, module) => {{ module.exports = __wakaru_load_cache; }});
+var init = __esm(() => {{ record(__wakaru_init_initialized); }});
+record(load()); init();
+"#
+    );
+    // The factory bodies themselves declare the base name and the next
+    // candidate, as a local and as a parameter.
+    let body_locals = format!(
+        r#"{SCOPE_HELPERS}
+var load = __commonJS((exports, module) => {{ var __wakaru_load_cache = 40, __wakaru_load_cache$2 = 1; module.exports = __wakaru_load_cache; }});
+var init = __esm(() => {{ var __wakaru_init_initialized = 40; record(((__wakaru_init_initialized$2) => __wakaru_init_initialized$2)(__wakaru_init_initialized)); }});
+record(load()); init();
+"#
+    );
+    for (bundle, owner, helper, fresh) in [
+        (&merged, "ns.js", "__wakaru_load_cache", "$2"),
+        (&standalone, "load.js", "__wakaru_load_cache", "$2"),
+        (&standalone, "init.js", "__wakaru_init_initialized", "$2"),
+        (&body_locals, "load.js", "__wakaru_load_cache", "$3"),
+        (&body_locals, "init.js", "__wakaru_init_initialized", "$3"),
+    ] {
+        let pairs = expect_unpack_raw(bundle);
+        let code = &pairs.iter().find(|(name, _)| name == owner).unwrap().1;
+        assert!(
+            code.contains(&format!("{helper} = 40"))
+                && code.contains(&format!("var {helper}{fresh}")),
+            "the helper must take a fresh name next to the user declaration: {code}"
+        );
+        assert_eq!(validate_output_modules(&pairs), vec![]);
+        assert_eq!(
+            validate_output_modules(&expect_unpack(bundle, "bundle.js")),
             vec![]
         );
     }

@@ -305,23 +305,19 @@ fn detect_from_prepared_factories(
         .iter()
         .flat_map(|f| f.referenced_bindings.iter().cloned())
         .collect();
+    // Every factory preassigns its own binding and the top-level state its
+    // body writes. A CommonJS factory follows the same path as a lazy ESM
+    // initializer: a scope module that writes that state claims the factory,
+    // and the merged emission keeps the factory's cached callable. Excluding
+    // CommonJS factories here left their callers without an import edge.
     let mut factory_preassigned_bindings: HashMap<BindingId, String> = HashMap::default();
     for factory in &pending_factories {
-        if factory.cjs_params.is_some() {
-            continue;
-        }
         factory_preassigned_bindings.insert(factory.binding.clone(), factory.filename.clone());
         for write_binding in &factory.write_bindings {
             factory_preassigned_bindings.insert(write_binding.clone(), factory.filename.clone());
         }
     }
     let mut factory_importable_bindings = factory_preassigned_bindings.clone();
-    factory_importable_bindings.extend(
-        pending_factories
-            .iter()
-            .filter(|factory| factory.cjs_params.is_none() || factory.write_bindings.is_empty())
-            .map(|factory| (factory.binding.clone(), factory.filename.clone())),
-    );
     for factory in &pending_factories {
         for ref_binding in &factory.referenced_bindings {
             if factory.write_bindings.contains(ref_binding)
@@ -441,7 +437,7 @@ fn detect_from_prepared_factories(
             .write_bindings
             .iter()
             .any(|binding| scope_claimed_factory_bindings.contains_key(binding));
-        let can_merge = factory.cjs_params.is_some() || is_scope_claimed_init;
+        let can_merge = is_scope_claimed_init;
 
         if let (true, Some(fname), true) = (is_single_target, target_filename, can_merge) {
             binding_to_filename.insert(factory.binding.clone(), fname.clone());
@@ -937,6 +933,9 @@ fn detect_from_prepared_factories(
             );
             for factory in standalone_factories {
                 if demoted.contains(&factory.filename) {
+                    // Body locals, parameters, and free references would
+                    // shadow the helper inside the restored callable.
+                    reserved_entry_atoms.extend(ident_atoms_in_stmts(&factory.body_stmts));
                     restored_items.extend(match &factory.cjs_params {
                         Some(cjs_params) => {
                             let cache = reserve_import_atom(
@@ -1035,7 +1034,8 @@ fn detect_from_prepared_factories(
                     .get(&module.filename)
                     .cloned()
                     .unwrap_or_default();
-                let mut merged_init_bodies: Vec<(Atom, Vec<Stmt>)> = Vec::new();
+                let mut merged_init_bodies: Vec<(Atom, Option<CjsFactoryParams>, Vec<Stmt>)> =
+                    Vec::new();
 
                 let already_imported = module_already_imports
                     .get(&module.filename)
@@ -1043,9 +1043,6 @@ fn detect_from_prepared_factories(
                     .unwrap_or_default();
 
                 for mf in factories {
-                    if mf.cjs_params.is_some() {
-                        continue;
-                    }
                     for write_binding in &mf.write_bindings {
                         let owned_binding = top_level_decl_binding_by_atom
                             .get(&write_binding.0)
@@ -1078,7 +1075,7 @@ fn detect_from_prepared_factories(
                             MergedRefTarget::SameModule | MergedRefTarget::Unresolved => {}
                         }
                     }
-                    merged_init_bodies.push((mf.var_name, mf.stmts));
+                    merged_init_bodies.push((mf.var_name, mf.cjs_params, mf.stmts));
                 }
 
                 let mut changed = true;
@@ -1223,10 +1220,15 @@ fn detect_from_prepared_factories(
             let extra_code = emit_items(body_items, module.filename.clone(), cm.clone());
             module.code.push('\n');
             module.code.push_str(&extra_code);
-            for (name, stmts) in merged_init_bodies {
-                module.code.push_str(&emit_esm_init_function_code(
+            let mut reserved_helper_atoms = merged_local_atoms;
+            reserved_helper_atoms
+                .extend(merged_init_bodies.iter().map(|(name, _, _)| name.clone()));
+            for (name, cjs_params, stmts) in merged_init_bodies {
+                module.code.push_str(&emit_factory_function_code(
                     &name,
+                    cjs_params.as_ref(),
                     stmts,
+                    &mut reserved_helper_atoms,
                     module.filename.clone(),
                     cm.clone(),
                 ));
@@ -1388,6 +1390,18 @@ fn detect_from_prepared_factories(
             ))
             .collect();
         rename_bindings(&mut body_items, &import_renames);
+        let mut reserved_helper_atoms: HashSet<Atom> = body_items
+            .iter()
+            .flat_map(|item| {
+                module_item_declared_binding_ids(item)
+                    .into_iter()
+                    .chain(module_item_import_binding_ids(item))
+            })
+            .map(|(atom, _)| atom)
+            .collect();
+        reserved_helper_atoms.extend(owned_export_atoms.iter().cloned());
+        reserved_helper_atoms.extend(group_write_bindings.iter().map(|(atom, _)| atom.clone()));
+        reserved_helper_atoms.extend(factories.iter().map(|factory| factory.var_name.clone()));
 
         let mut write_names: Vec<Atom> = group_write_bindings
             .iter()
@@ -1422,48 +1436,14 @@ fn detect_from_prepared_factories(
         for mut factory in factories {
             rename_bindings(&mut factory.body_stmts, &import_renames);
             let factory_body_stmts = std::mem::take(&mut factory.body_stmts);
-            if let Some(cjs_params) = &factory.cjs_params {
-                let cache_name = format!("__wakaru_{}_cache", factory.var_name);
-                code.push_str(&format!("var {cache_name};\n"));
-                code.push_str(&format!("export function {}() {{\n", factory.var_name));
-                let cached_return = cjs_params
-                    .module
-                    .as_ref()
-                    .map(|_| format!("{cache_name}.exports"))
-                    .unwrap_or_else(|| cache_name.clone());
-                code.push_str(&format!("if ({cache_name}) return {cached_return};\n"));
-                code.push_str(&format!("var {} = {{}};\n", cjs_params.exports));
-                if let Some(module_name) = &cjs_params.module {
-                    code.push_str(&format!(
-                        "var {module_name} = {{ exports: {} }};\n",
-                        cjs_params.exports
-                    ));
-                    code.push_str(&format!("{cache_name} = {module_name};\n"));
-                } else {
-                    code.push_str(&format!("{cache_name} = {};\n", cjs_params.exports));
-                }
-                code.push_str(&emit_items(
-                    factory_body_stmts
-                        .into_iter()
-                        .map(ModuleItem::Stmt)
-                        .collect(),
-                    group_filename.clone(),
-                    cm.clone(),
-                ));
-                let return_expr = cjs_params
-                    .module
-                    .as_ref()
-                    .map(|module_name| format!("{module_name}.exports"))
-                    .unwrap_or_else(|| cjs_params.exports.to_string());
-                code.push_str(&format!("\nreturn {return_expr};\n}}\n"));
-            } else {
-                code.push_str(&emit_esm_init_function_code(
-                    &factory.var_name,
-                    factory_body_stmts,
-                    group_filename.clone(),
-                    cm.clone(),
-                ));
-            }
+            code.push_str(&emit_factory_function_code(
+                &factory.var_name,
+                factory.cjs_params.as_ref(),
+                factory_body_stmts,
+                &mut reserved_helper_atoms,
+                group_filename.clone(),
+                cm.clone(),
+            ));
         }
         modules.push(UnpackedModule {
             id: group_id,
@@ -1887,19 +1867,72 @@ fn synthesize_entry_cjs_items(
     vec![(span.lo.0, cache_decl), (span.lo.0, factory_fn)]
 }
 
-fn emit_esm_init_function_code(
+/// Every identifier name mentioned in `stmts`, at any depth: declarations,
+/// parameters, and references alike.
+fn ident_atoms_in_stmts(stmts: &[Stmt]) -> HashSet<Atom> {
+    struct IdentAtomCollector {
+        atoms: HashSet<Atom>,
+    }
+    impl Visit for IdentAtomCollector {
+        fn visit_ident(&mut self, ident: &Ident) {
+            self.atoms.insert(ident.sym.clone());
+        }
+    }
+    let mut collector = IdentAtomCollector {
+        atoms: HashSet::default(),
+    };
+    for stmt in stmts {
+        stmt.visit_with(&mut collector);
+    }
+    collector.atoms
+}
+
+/// Emit a factory as an exported callable: a CommonJS factory becomes a
+/// cached `require`-style function, a lazy ESM initializer a guarded init
+/// function. The cache or guard takes a name not already reserved in the
+/// target module and adds it to `reserved`.
+fn emit_factory_function_code(
     name: &Atom,
+    cjs_params: Option<&CjsFactoryParams>,
     stmts: Vec<Stmt>,
+    reserved: &mut HashSet<Atom>,
     filename: String,
     cm: Lrc<SourceMap>,
 ) -> String {
-    let guard = format!("__wakaru_{name}_initialized");
+    // The helper is read inside the callable, so a body local, parameter, or
+    // free reference with the same name would shadow it. Reserve every
+    // identifier the body mentions; over-reserving only costs a suffix.
+    reserved.extend(ident_atoms_in_stmts(&stmts));
     let body = emit_items(
         stmts.into_iter().map(ModuleItem::Stmt).collect(),
         filename,
         cm,
     );
-    format!("var {guard} = false;\nexport function {name}() {{\nif ({guard}) return;\n{guard} = true;\n{body}\n}}\n")
+    let Some(cjs_params) = cjs_params else {
+        let guard = reserve_import_atom(&format!("__wakaru_{name}_initialized").into(), reserved);
+        return format!("var {guard} = false;\nexport function {name}() {{\nif ({guard}) return;\n{guard} = true;\n{body}\n}}\n");
+    };
+    let cache = reserve_import_atom(&format!("__wakaru_{name}_cache").into(), reserved);
+    let exports = &cjs_params.exports;
+    let mut code = format!("var {cache};\nexport function {name}() {{\n");
+    match &cjs_params.module {
+        Some(module) => {
+            code.push_str(&format!("if ({cache}) return {cache}.exports;\n"));
+            code.push_str(&format!("var {exports} = {{}};\n"));
+            code.push_str(&format!("var {module} = {{ exports: {exports} }};\n"));
+            code.push_str(&format!("{cache} = {module};\n"));
+            code.push_str(&body);
+            code.push_str(&format!("\nreturn {module}.exports;\n}}\n"));
+        }
+        None => {
+            code.push_str(&format!("if ({cache}) return {cache};\n"));
+            code.push_str(&format!("var {exports} = {{}};\n"));
+            code.push_str(&format!("{cache} = {exports};\n"));
+            code.push_str(&body);
+            code.push_str(&format!("\nreturn {exports};\n}}\n"));
+        }
+    }
+    code
 }
 
 fn repair_entry_imports(
